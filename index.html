@@ -64,6 +64,8 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .dot{width:15px;height:15px;border-radius:50%;flex:none}
 .swatch{width:62px;height:62px;border-radius:50%;border:2px solid var(--line2);flex:none;padding:0;overflow:hidden}
 .drag{display:flex;align-items:center;gap:12px;padding:12px 0}
+.sug{border:1px solid var(--line2);border-radius:12px;padding:9px 13px;font-size:13px;color:var(--tx2);background:transparent}
+.undo{font-size:13px;font-weight:600;color:#7FB6EC;text-decoration:underline;background:none;border:0;padding:0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:26px;background:var(--ink);color:var(--onink);
   padding:12px 20px;border-radius:14px;font-size:14px;font-weight:600;z-index:50;max-width:90%}
 .jar{width:132px;height:158px;border:2px solid var(--line2);border-radius:22px;overflow:hidden;
@@ -93,7 +95,7 @@ async function save(){
   return ok;
 }
 
-const BUILD='v6 · 29 Jul';
+const BUILD='v7 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -169,8 +171,39 @@ const uid=()=>Math.random().toString(36).slice(2,10);
 /* ---------------- state ---------------- */
 let S=null,V={view:'home'},toastT=null;
 function fresh(){
-  return{v:1,setup:false,jarOpen:0,pwDate:'',pw:{},
+  return{v:1,setup:false,jarOpen:0,pwDate:'',pw:{},log:[],quick:['7-Eleven','Shopee Food'],
          cards:CARDS.map(c=>({...c})),txns:[],plans:[],cycles:[],moves:[]};
+}
+
+/* ---------------- undo ----------------
+   Anything that changes several things at once takes a snapshot first, so
+   undo restores rather than trying to reverse each step by hand.         */
+function snapshot(){
+  return JSON.stringify({txns:S.txns,plans:S.plans,cycles:S.cycles,moves:S.moves,
+                         jarOpen:S.jarOpen,cards:S.cards});
+}
+function logAct(o){
+  S.log=S.log||[];
+  S.log.unshift({id:uid(),t:new Date().toISOString(),...o});
+  const cut=Date.now()-7*864e5;
+  S.log=S.log.filter(x=>new Date(x.t).getTime()>=cut).slice(0,80);
+  S.log.forEach((x,i)=>{if(i>=8)delete x.snap;});   // keep storage sane
+}
+function undoTo(id){
+  const i=S.log.findIndex(x=>x.id===id);
+  if(i<0||!S.log[i].snap)return false;
+  const d=JSON.parse(S.log[i].snap);
+  S.txns=d.txns;S.plans=d.plans;S.cycles=d.cycles;S.moves=d.moves;
+  S.jarOpen=d.jarOpen;if(d.cards)S.cards=d.cards;
+  S.log=S.log.slice(i+1);
+  return true;
+}
+function logTime(t){
+  const d=new Date(t),n=new Date();
+  const day=d.toDateString()===n.toDateString()?'today'
+    :d.toDateString()===new Date(n-864e5).toDateString()?'yesterday'
+    :d.getDate()+' '+MON[d.getMonth()];
+  return day+', '+D(d.getHours())+':'+D(d.getMinutes());
 }
 
 /* derived */
@@ -239,7 +272,8 @@ function draw(){
   const v=V.view;
   let h='';
   if(!S.setup&&v!=='setup')return go('setup');
-  if(v==='setup')h=vSetup();
+  if(V.confirm)h=vConfirm();
+  else if(v==='setup')h=vSetup();
   else if(v==='home')h=vHome();
   else if(v==='add')h=vAdd();
   else if(v==='split')h=vSplit();
@@ -248,11 +282,34 @@ function draw(){
   else if(v==='bill')h=vBill();
   else if(v==='cards')h=vCards();
   else if(v==='cardedit')h=vCardEdit();
+  else if(v==='quick')h=vQuick();
+  else if(v==='cycle')h=vCycle();
   else if(v==='history')h=vHistory();
   else if(v==='settings')h=vSettings();
   app().innerHTML=h;
   if(V.focus){const el=document.getElementById(V.focus);if(el)el.focus();}
 }
+
+/* ---------- the confirm step, drawn over whatever screen you were on ---------- */
+function vConfirm(){
+  const q=V.confirm;
+  return `<button class="back" data-act="confirmno">‹ Back</button>
+  <h1>${q.title}</h1>
+  <div class="mut" style="margin-top:-8px">${q.sub||''}</div>
+  <div class="sp"></div>
+  ${q.hero?`<div class="tile" style="background:${q.tint}">
+    <div style="font-size:13px;color:${q.on}">${esc(q.hero.top)}</div>
+    <div class="big" style="color:${q.on};font-size:32px">${q.hero.amt}</div>
+    ${q.hero.foot?`<div style="font-size:12px;color:${q.on};opacity:.85">${esc(q.hero.foot)}</div>`:''}
+  </div>`:''}
+  ${(q.rows||[]).length?`<div class="card">${q.rows.map((r,i)=>
+    `<div class="item"><div class="mut">${r[0]}</div><div style="${i===q.rows.length-1?'font-weight:600':''}">${r[1]}</div></div>`).join('')}</div>`:''}
+  <button class="btn" ${q.color?`style="background:${q.color};color:#fff"`:''} data-act="confirmyes">${q.cta}</button>
+  <div class="sp"></div>
+  <button class="btn ghost" data-act="confirmno">${q.cancel||'Not yet — go back'}</button>
+  ${q.note?`<div class="mut" style="margin-top:12px">${q.note}</div>`:''}`;
+}
+function ask(o){V.confirm=o;draw();window.scrollTo(0,0);}
 function nav(cur){
   const items=[['home','Home'],['jar','Jar'],['bill','Check bill'],['history','History'],['settings','Settings']];
   return '<div class="nav">'+items.map(([k,l])=>
@@ -345,13 +402,36 @@ function vHome(){
 }
 
 /* ---------- add ---------- */
-function quickNames(){
-  const pinned=['7-Eleven','Shopee Food'];
-  const counts={};
-  S.txns.forEach(t=>{if(t.note&&t.note!=='—')counts[t.note]=(counts[t.note]||0)+1});
-  const often=Object.keys(counts).sort((a,b)=>counts[b]-counts[a])
-    .filter(n=>!pinned.some(p=>p.toLowerCase()===n.toLowerCase())).slice(0,2);
-  return pinned.concat(often);
+function quickNames(){return (S.quick||[]).slice(0,12)}
+function vQuick(){
+  const used={};
+  S.txns.forEach(t=>{if(t.note&&t.note!=='—')used[t.note]=(used[t.note]||0)+1});
+  const sug=Object.keys(used).sort((a,b)=>used[b]-used[a])
+    .filter(n=>!(S.quick||[]).some(q=>q.toLowerCase()===n.toLowerCase())).slice(0,6);
+  return `<button class="back" data-act="quickback">‹ Back</button>
+  <h1>Quick names</h1>
+  <div class="mut" style="margin-top:-8px">The buttons above the name box. Drag to reorder, tap ✕ to remove.</div>
+  <div class="sp"></div>
+  <div class="card" style="padding:4px 16px">
+    ${(S.quick||[]).length?(S.quick||[]).map((n,i)=>`<div class="drag" data-row="${i}" data-list="quick"
+      style="${i?'border-top:1px solid var(--line);':''}${dragI===i&&dragList==='quick'?'opacity:.45;':''}">
+      <span class="grip" data-grip="${i}" data-list="quick">≡</span>
+      <div style="flex:1;font-size:15px">${esc(n)}</div>
+      <button data-delq="${i}" style="font-size:19px;color:var(--tx3);padding:6px 4px">✕</button></div>`).join('')
+      :'<div class="mut" style="padding:14px 0">No buttons yet.</div>'}
+  </div>
+  <div class="card">
+    <div class="mut" style="margin-bottom:9px">Add one</div>
+    <input id="newq" placeholder="Name it">
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="addq">Add</button>
+  </div>
+  ${sug.length?`<div class="card">
+    <div class="mut" style="margin-bottom:10px">You use these a lot — tap to add</div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px">
+      ${sug.map(n=>`<button class="sug" data-addq="${esc(n)}">＋ ${esc(n)}</button>`).join('')}
+    </div></div>`:''}
+  <div class="mut">Removing a button never changes anything you've already logged, and the name still turns up when you type.</div>`;
 }
 function vAdd(){
   V.amt=V.amt||'';V.rsv=V.rsv||0;
@@ -377,11 +457,15 @@ function vAdd(){
   <div class="lbl" style="margin-bottom:8px">What was it?</div>
   <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
     ${quickNames().map(n=>`<button class="ct ${V.note===n?'':'off'}"
-      style="flex:1 1 auto;padding:12px 14px;font-size:14px;${V.note===n?'background:var(--ink);color:var(--onink);border-color:var(--ink)':''}"
+      style="flex:0 1 auto;padding:12px 14px;font-size:14px;${V.note===n?'background:var(--ink);color:var(--onink);border-color:var(--ink)':''}"
       data-chip="${esc(n)}">${esc(n)}</button>`).join('')}
+    <button class="ct off" style="flex:0 1 auto;padding:12px 14px;font-size:14px;border-style:dashed;color:var(--tx3)"
+      data-act="editquick">✎ Edit</button>
   </div>
   <input id="note" placeholder="Or type something else" value="${esc(V.note||'')}" list="notes-l">
-  <datalist id="notes-l">${[...new Set(S.txns.map(t=>t.note).filter(Boolean))].slice(0,60).map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+  <datalist id="notes-l">${[...new Set(S.txns.map(t=>t.note).filter(Boolean))].slice(0,80).map(n=>`<option value="${esc(n)}">`).join('')}</datalist>
+  ${V.note&&!quickNames().some(n=>n.toLowerCase()===V.note.toLowerCase())?`<div style="margin-top:9px">
+    <button class="sug" style="border-style:dashed" data-addq="${esc(V.note)}">＋ Keep “${esc(V.note)}” as a button</button></div>`:''}
   <div class="sp"></div>
   ${V.showDate
     ? `<input id="dt" type="date" value="${V.date||today()}">`
@@ -578,9 +662,9 @@ function vCards(){
   <div class="sp"></div>
   <div class="card" style="padding:4px 16px">`;
   S.cards.forEach((c,i)=>{
-    h+=`<div class="drag" data-cardrow="${i}" style="${i?'border-top:1px solid var(--line);':''}${
-      dragI===i?'opacity:.45;':''}${c.hidden?'opacity:.5;':''}">
-      <span class="grip" data-grip="${i}">≡</span>
+    h+=`<div class="drag" data-row="${i}" data-list="cards" style="${i?'border-top:1px solid var(--line);':''}${
+      dragI===i&&dragList==='cards'?'opacity:.45;':''}${c.hidden?'opacity:.5;':''}">
+      <span class="grip" data-grip="${i}" data-list="cards">≡</span>
       <span class="dot" style="background:${c.c}"></span>
       <div style="flex:1" data-edit="${c.id}">
         <div class="nm">${esc(c.name)}${c.hidden?' <span class="mut">· hidden</span>':''}</div>
@@ -628,16 +712,56 @@ function vCardEdit(){
 
 /* ---------- history / settings ---------- */
 function vHistory(){
+  const log=(S.log||[]).filter(x=>Date.now()-new Date(x.t).getTime()<7*864e5);
   const done=S.cycles.filter(c=>c.status==='paid').sort((a,b)=>a.closing<b.closing?1:-1);
-  let h=`<h1>History</h1><div class="mut">${S.txns.length} purchases kept. Nothing is ever deleted.</div><div class="sp"></div>`;
+  let h=`<h1>History</h1><div class="mut" style="margin-top:-8px">${S.txns.length} purchases kept. Nothing is ever deleted.</div><div class="sp"></div>`;
+  if(log.length){
+    h+=`<div class="card"><div class="nm">Recent activity</div>
+      <div class="mut" style="margin-bottom:2px">The last 7 days. Anything with Undo can be put back.</div>`;
+    log.forEach((x,i)=>{
+      const c=x.cardId?card(x.cardId):null;
+      h+=`<div style="padding:13px 0;border-top:1px solid var(--line)">
+        <div class="row"><span style="font-size:14px">
+          <span class="dot" style="display:inline-block;width:11px;height:11px;background:${c?c.c:'var(--tx3)'};vertical-align:middle"></span>
+          &nbsp;${esc(x.label)}</span>
+        ${x.snap?`<button class="undo" data-undo="${x.id}">Undo</button>`:'<span class="mut">—</span>'}</div>
+        <div class="mut" style="margin-left:19px">${logTime(x.t)}${x.sub?' · '+esc(x.sub):''}</div></div>`;
+    });
+    h+='</div>';
+  }
+  h+='<div class="mut" style="margin-bottom:10px">CLOSED CYCLES</div>';
   if(!done.length)h+='<div class="card"><div class="mut">No closed cycles yet.</div></div>';
   done.forEach(cy=>{const c=card(cy.cardId);
     const n=S.txns.filter(t=>t.cyc===cy.key).length;
-    h+=`<div class="card" style="padding:14px 16px"><div class="row">
-      <div><div class="nm" style="color:${c.c}">${esc(c.name)}</div>
-      <div class="mut">closed ${shortDate(cy.closing)} · ${n} purchases · paid ${cy.paidOn?shortDate(cy.paidOn):''}</div></div>
-      <div class="nm">${B2(cy.total)}</div></div></div>`});
+    h+=`<div class="card" style="padding:14px 16px" data-cyc="${cy.key}">
+      <div class="row"><span class="nm" style="color:${c.c}">${esc(c.name)}</span><span class="nm">${B2(cy.total)}</span></div>
+      <div class="row"><span class="mut">closed ${shortDate(cy.closing)} · ${n} purchase${n===1?'':'s'} · paid${cy.paidOn?' '+shortDate(cy.paidOn):''}</span>
+      <span class="mut">›</span></div></div>`});
   return h+nav('history');
+}
+function vCycle(){
+  const cy=S.cycles.find(x=>x.key===V.cycKey);
+  if(!cy)return vHistory();
+  const c=card(cy.cardId);
+  const txns=S.txns.filter(t=>t.cyc===cy.key).sort((a,b)=>a.date<b.date?1:-1);
+  let h=`<button class="back" data-go="history">‹ History</button>
+  <h1 style="color:${c.c}">${esc(c.name)}</h1>
+  <div class="mut" style="margin-top:-8px">closed ${shortDate(cy.closing)} · due ${shortDate(cy.due)}${
+    cy.status==='paid'?' · paid'+(cy.paidOn?' '+shortDate(cy.paidOn):''):' · not paid yet'}</div>
+  <div class="sp"></div>
+  <div class="tile" style="background:${tint(c)}">
+    <div style="font-size:13px;color:${ontint(c)}">Bill</div>
+    <div class="big" style="color:${ontint(c)};font-size:32px">${B2(cy.total)}</div></div>
+  <div class="card">${txns.length?txns.map(t=>`<div class="item">
+      <div><div>${esc(t.note||'—')}</div><div class="mut">${shortDate(t.date)}</div></div>
+      <div>${B2(t.actual!=null?t.actual:t.reserved)}</div></div>`).join('')
+    :'<div class="mut">No purchases were filed into this cycle.</div>'}</div>`;
+  if(cy.status==='paid'){
+    h+=`<button class="btn ghost" data-unpay="${cy.key}">Mark as not paid yet</button>
+    <div class="mut" style="margin-top:10px">Puts ${B2(cy.total)} back in the jar and returns it to your home screen as a bill to pay.</div>`;
+  }
+  h+=`<div class="mut" style="margin-top:14px">To undo the whole bill check — the purchases it filed and the แบ่ง progress it recorded — use Undo on the matching line in Recent activity.</div>`;
+  return h;
 }
 function vSettings(){
   return `<h1>Settings</h1>
@@ -649,6 +773,8 @@ function vSettings(){
       <span class="mut">›</span></div>`).join('')}
   </div>
   <button class="btn ghost sm" data-go="cards">Reorder or edit your cards</button>
+  <div class="sp"></div>
+  <button class="btn ghost sm" data-act="quicksettings">Quick names on the Add screen</button>
   <div class="sp"></div><div class="sp"></div>
   <div class="card"><div class="nm">Bring in more notes</div>
     <div class="mut" style="margin:6px 0 10px">Safe to paste the same thing twice — it won't duplicate.</div>
@@ -955,39 +1081,68 @@ async function autoOpen(bytes,cardId){
 }
 
 /* ---------------- drag to reorder ---------------- */
-let dragI=null;
+let dragI=null,dragList=null;
+const listOf=n=>n==='quick'?(S.quick=S.quick||[]):S.cards;
 document.addEventListener('pointerdown',e=>{
   const g=e.target.closest('[data-grip]');
   if(!g)return;
   e.preventDefault();
-  dragI=+g.dataset.grip;
+  dragI=+g.dataset.grip;dragList=g.dataset.list||'cards';
   draw();
 });
 document.addEventListener('pointermove',e=>{
   if(dragI==null)return;
   e.preventDefault();
-  const rows=[...document.querySelectorAll('[data-cardrow]')];
+  const rows=[...document.querySelectorAll('[data-row][data-list="'+dragList+'"]')];
   const over=rows.findIndex(r=>{
     const b=r.getBoundingClientRect();
     return e.clientY>=b.top&&e.clientY<=b.bottom;
   });
   if(over>=0&&over!==dragI){
-    const [m]=S.cards.splice(dragI,1);
-    S.cards.splice(over,0,m);
+    const L=listOf(dragList);
+    const [m]=L.splice(dragI,1);
+    L.splice(over,0,m);
     dragI=over;draw();
   }
 },{passive:false});
 document.addEventListener('pointerup',async()=>{
   if(dragI==null)return;
-  dragI=null;await save();draw();
+  dragI=null;dragList=null;await save();draw();
 });
-document.addEventListener('pointercancel',()=>{dragI=null;draw();});
+document.addEventListener('pointercancel',()=>{dragI=null;dragList=null;draw();});
 
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col]');
+  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq]');
   if(!t)return;
   const g=t.dataset;
+  if(g.cyc)return go('cycle',{cycKey:g.cyc});
+  if(g.undo){
+    const x=(S.log||[]).find(y=>y.id===g.undo);
+    if(!x)return;
+    return ask({kind:'undo',logId:x.id,title:'Put this back?',
+      sub:esc(x.label),
+      cta:'Yes, undo it',cancel:'Leave it as it is',
+      note:'This puts everything back to how it was just before that. Anything you did after it will be undone too.'});
+  }
+  if(g.unpay){
+    const cy=S.cycles.find(x=>x.key===g.unpay),c=card(cy.cardId);
+    return ask({kind:'unpay',key:g.unpay,title:'Not paid after all?',
+      sub:'It goes back to your home screen as a bill to pay.',
+      tint:tint(c),on:ontint(c),color:c.c,
+      hero:{top:c.name,amt:B2(cy.total),foot:'bill from '+shortDate(cy.closing)},
+      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+cy.total)]],
+      cta:'Yes, mark it unpaid',cancel:'Leave it as paid'});
+  }
+  if(g.delq!==undefined){
+    S.quick.splice(+g.delq,1);await save();return draw();
+  }
+  if(g.addq!==undefined){
+    keepNote();
+    S.quick=S.quick||[];
+    if(!S.quick.some(n=>n.toLowerCase()===g.addq.toLowerCase()))S.quick.push(g.addq);
+    await save();toast('Added “'+g.addq+'”');return draw();
+  }
   if(g.edit)return go('cardedit',{cardId:g.edit});
   if(g.pickCol){
     const el=document.getElementById('ccol');
@@ -1015,10 +1170,15 @@ document.addEventListener('click',async e=>{
     return draw();
   }
   if(g.pay){
-    const cy=S.cycles.find(c=>c.key===g.pay);
-    S.moves.push({d:today(),amt:cy.total,kind:'out',label:card(cy.cardId).name});
-    cy.status='paid';cy.paidOn=today();
-    await save();toast('Paid — cycle filed away');return draw();
+    const cy=S.cycles.find(c=>c.key===g.pay),c=card(cy.cardId);
+    const bal=jarBalance();
+    return ask({kind:'pay',key:g.pay,title:'Did you pay it?',
+      sub:'Only tap yes once the money has actually left your bank.',
+      tint:tint(c),on:ontint(c),color:c.c,
+      hero:{top:c.name,amt:B2(cy.total),foot:'bill from '+shortDate(cy.closing)+' · due '+shortDate(cy.due)},
+      rows:[['Jar now',B2(bal)],['After this',B2(bal-cy.total)]],
+      cta:'Yes, I\'ve paid it',
+      note:'You can undo this later from History.'});
   }
   if(g.del){
     S.txns=S.txns.filter(x=>x.id!==g.del);await save();return draw();
@@ -1039,17 +1199,78 @@ document.addEventListener('click',async e=>{
   if(a==='moveall'){
     const nm=notMoved();const tot=nm.reduce((s,x)=>s+x.reserved,0);
     if(!tot)return;
-    nm.forEach(x=>x.moved=true);
-    S.moves.push({d:today(),amt:tot,kind:'in',label:nm.length+' purchases'});
-    await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    const ids=[...new Set(nm.map(t=>t.cardId))];
+    const c=ids.length===1?card(ids[0]):null;
+    return ask({kind:'moveall',title:'Moved the money?',
+      sub:'Tap yes once you\'ve made the transfer in your banking app.',
+      tint:c?tint(c):(dark()?'#BA751726':'#FAEEDA'),on:c?ontint(c):(dark()?'#EF9F27':'#633806'),
+      color:c?c.c:'#BA7517',
+      hero:{top:nm.length+' purchase'+(nm.length>1?'s':''),amt:B(tot),
+            foot:nm.slice(0,4).map(x=>x.note||'—').join(' · ')},
+      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+tot)]],
+      cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
   }
   if(a==='moveplans'){
     const list=planTodo();
     const tot=list.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
     if(!tot)return;
-    list.forEach(p=>{p.lastMoved=cycKey(card(p.cardId),today())});
-    S.moves.push({d:today(),amt:tot,kind:'in',label:list.length+' แบ่ง payments'});
-    await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    const ids=[...new Set(list.map(p=>p.cardId))];
+    const c=ids.length===1?card(ids[0]):null;
+    return ask({kind:'moveplans',title:'Moved the money?',
+      sub:'Tap yes once you\'ve made the transfer in your banking app.',
+      tint:c?tint(c):(dark()?'#7F77DD26':'#EEEDFE'),on:c?ontint(c):(dark()?'#A9A2F5':'#3C3489'),
+      color:c?c.c:'#7F77DD',
+      hero:{top:list.length+' แบ่ง payment'+(list.length>1?'s':''),amt:B(tot),
+            foot:list.map(p=>p.title).slice(0,4).join(' · ')},
+      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+tot)]],
+      cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
+  }
+  if(a==='confirmno'){V.confirm=null;return draw();}
+  if(a==='confirmyes'){
+    const q=V.confirm;V.confirm=null;
+    const snap=snapshot();
+    if(q.kind==='pay'){
+      const cy=S.cycles.find(x=>x.key===q.key),c=card(cy.cardId);
+      const mv={id:uid(),d:today(),amt:cy.total,kind:'out',label:c.name};
+      S.moves.push(mv);cy.status='paid';cy.paidOn=today();cy.payMove=mv.id;
+      logAct({kind:'pay',cardId:c.id,label:'Paid '+c.name+' '+B2(cy.total),
+        sub:'bill from '+shortDate(cy.closing),snap});
+      await save();toast('Paid — filed away');return go('home');
+    }
+    if(q.kind==='moveall'){
+      const nm=notMoved();const tot=nm.reduce((s,x)=>s+x.reserved,0);
+      const ids=[...new Set(nm.map(t=>t.cardId))];
+      nm.forEach(x=>x.moved=true);
+      S.moves.push({id:uid(),d:today(),amt:tot,kind:'in',label:nm.length+' purchases'});
+      logAct({kind:'move',cardId:ids.length===1?ids[0]:null,label:'Moved '+B(tot)+' to the jar',
+        sub:nm.length+' purchase'+(nm.length>1?'s':''),snap});
+      await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    }
+    if(q.kind==='moveplans'){
+      const list=planTodo();
+      const tot=list.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
+      const ids=[...new Set(list.map(p=>p.cardId))];
+      list.forEach(p=>{p.lastMoved=cycKey(card(p.cardId),today())});
+      S.moves.push({id:uid(),d:today(),amt:tot,kind:'in',label:list.length+' แบ่ง payments'});
+      logAct({kind:'move',cardId:ids.length===1?ids[0]:null,label:'Moved '+B(tot)+' to the jar',
+        sub:list.length+' แบ่ง payment'+(list.length>1?'s':''),snap});
+      await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    }
+    if(q.kind==='close')return doClose(snap);
+    if(q.kind==='undo'){
+      if(undoTo(q.logId)){await save();toast('Put back');return go('history');}
+      toast('That one can\'t be undone');return draw();
+    }
+    if(q.kind==='unpay'){
+      const cy=S.cycles.find(x=>x.key===q.key),c=card(cy.cardId);
+      if(cy.payMove)S.moves=S.moves.filter(m=>m.id!==cy.payMove);
+      else S.moves.push({id:uid(),d:today(),amt:cy.total,kind:'in',label:'unpaid '+c.name});
+      cy.status='billed';delete cy.paidOn;delete cy.payMove;
+      logAct({kind:'unpay',cardId:c.id,label:'Marked '+c.name+' as not paid',
+        sub:B2(cy.total)+' back in the jar',snap});
+      await save();toast('Back on your home screen to pay');return go('home');
+    }
+    return draw();
   }
   if(a==='setbal'){
     const v=Number((document.getElementById('realbal').value||'').replace(/,/g,''));
@@ -1086,6 +1307,20 @@ document.addEventListener('click',async e=>{
     }
     S.setup=true;await save();return go('home');
   }
+  if(a==='editquick'){keepNote();V.from='add';return go('quick',{from:'add',amt:V.amt,cardId:V.cardId,note:V.note,rsv:V.rsv,date:V.date,showDate:V.showDate});}
+  if(a==='quickback'){
+    if(V.from==='add')return go('add',{amt:V.amt,cardId:V.cardId,note:V.note,rsv:V.rsv,date:V.date,showDate:V.showDate});
+    return go('settings');
+  }
+  if(a==='addq'){
+    const el=document.getElementById('newq');
+    const n=(el.value||'').trim();
+    if(!n)return toast('Type a name first');
+    S.quick=S.quick||[];
+    if(S.quick.some(x=>x.toLowerCase()===n.toLowerCase()))return toast('Already there');
+    S.quick.push(n);await save();return draw();
+  }
+  if(a==='quicksettings')return go('quick',{from:'settings'});
   if(a==='savecard'){
     const c=card(V.cardId);
     const nm2=document.getElementById('cname').value.trim();
@@ -1182,21 +1417,45 @@ document.addEventListener('click',async e=>{
     const b=V.b,c=card(b.cardId);
     const tot=Number((document.getElementById('btot').value||'0').replace(/,/g,''));
     if(!tot)return toast('Put the statement total in first');
-    const closing=b.closing||iso(closingFor(c,b.lines.length?b.lines[b.lines.length-1].date:today()));
-    const key=c.id+'|'+closing;
-    const cy=ensureCycle(key);
-    if(b.due)cy.due=b.due;
-    cy.total=tot;
-    S.txns.filter(t=>t.cardId===c.id&&(!cycleOf(t)||cycleOf(t).status==='open')).forEach(t=>{
-      if(parse(t.date)<=parse(closing))t.cyc=key;
-    });
-    if(b.paidAlready){cy.status='paid';cy.paidOn=today();
-      S.txns.filter(t=>t.cyc===key).forEach(t=>t.moved=true);
-      await save();toast('Filed away');
-    }else{cy.status='billed';await save();toast('Cycle closed — it\'s on your home screen to pay');}
-    return go('home');
+    b.total=tot;
+    return ask({kind:'close',
+      title:b.paidAlready?'File this bill away?':'Close this cycle?',
+      sub:b.paidAlready?'It goes straight to History as already paid.'
+        :'It moves to your home screen as a bill to pay.',
+      tint:tint(c),on:ontint(c),color:c.c,
+      hero:{top:c.name,amt:B2(tot),foot:b.closing?'bill from '+shortDate(b.closing):''},
+      rows:[['Lines on the bill',b.lines.length],['Matched your notes',b.matched],
+            ['Added just now',b.added||0],['Set aside',B2(b.reservedSum||0)]],
+      cta:b.paidAlready?'Yes, file it away':'Yes, close it',
+      note:'You can undo this later from History.'});
   }
 });
+async function doClose(snap){
+  const b=V.b,c=card(b.cardId);
+  const tot=b.total;
+  const closing=b.closing||iso(closingFor(c,b.lines.length?b.lines[b.lines.length-1].date:today()));
+  const key=c.id+'|'+closing;
+  const cy=ensureCycle(key);
+  if(b.due)cy.due=b.due;
+  cy.total=tot;
+  S.txns.filter(t=>t.cardId===c.id&&(!cycleOf(t)||cycleOf(t).status==='open')).forEach(t=>{
+    if(parse(t.date)<=parse(closing))t.cyc=key;
+  });
+  const n=S.txns.filter(t=>t.cyc===key).length;
+  if(b.paidAlready){
+    cy.status='paid';cy.paidOn=today();
+    S.txns.filter(t=>t.cyc===key).forEach(t=>t.moved=true);
+    logAct({kind:'close',cardId:c.id,label:'Filed '+c.name+' · '+shortDate(closing)+' as paid',
+      sub:n+' purchase'+(n===1?'':'s')+' filed',snap});
+    toast('Filed away');
+  }else{
+    cy.status='billed';
+    logAct({kind:'close',cardId:c.id,label:'Closed '+c.name+' · '+shortDate(closing),
+      sub:n+' purchase'+(n===1?'':'s')+' filed',snap});
+    toast('Cycle closed — it\'s on your home screen to pay');
+  }
+  await save();return go('home');
+}
 function keepNote(){
   const n=document.getElementById('note');if(n)V.note=n.value;
   const d=document.getElementById('dt');if(d)V.date=d.value;
@@ -1275,6 +1534,8 @@ document.addEventListener('change',async e=>{
   if(!S.cards)S=fresh();
   if(!S.pw)S.pw={};
   if(S.pwDate===undefined)S.pwDate='';
+  if(!S.log)S.log=[];
+  if(!S.quick)S.quick=['7-Eleven','Shopee Food'];
   const fixed=repairOpen();
   if(fixed)setTimeout(()=>toast('Cleaned up '+fixed+' mismatched purchase'+(fixed>1?'s':'')),600);
   if(!S.cards||!S.cards.length)S.cards=CARDS.map(c=>({...c}));
