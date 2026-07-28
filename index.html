@@ -85,7 +85,7 @@ async function save(){
   return ok;
 }
 
-const BUILD='v4 · 29 Jul';
+const BUILD='v5 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -187,6 +187,17 @@ function planTodo(){
 function planDue(){return activePlans().reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0)}
 function extra(){return jarBalance()-unpaidBills()-openReserved()-planDue()}
 function notMoved(){return S.txns.filter(t=>!t.moved)}
+
+/* a purchase sitting in a cycle that hasn't been billed yet can't have a real
+   statement amount — earlier builds could set one by mistake, so clear it */
+function repairOpen(){
+  let n=0;
+  S.txns.forEach(t=>{
+    const cy=cycleOf(t);
+    if(t.actual!=null&&(!cy||cy.status==='open')){t.actual=null;n++;}
+  });
+  return n;
+}
 
 /* ---------------- render ---------------- */
 const app=()=>document.getElementById('app');
@@ -774,9 +785,17 @@ function readCycleDates(text){
 }
 
 /* matching */
-function runMatch(cardId,parsed){
+function runMatch(cardId,parsed,closing){
   const c=card(cardId);
-  const pool=S.txns.filter(t=>t.cardId===cardId&&!t.actual);
+  // only consider purchases that could actually be on this bill
+  const lo=closing?parse(closing)-50*864e5:null;
+  const hi=closing?parse(closing).getTime():null;
+  const inWindow=t=>{
+    if(!closing)return true;
+    const d=parse(t.date).getTime();
+    return d<=hi&&d>=lo;
+  };
+  const pool=S.txns.filter(t=>t.cardId===cardId&&!t.actual&&inWindow(t));
   let matched=0;const queue=[];let reservedSum=0;
   parsed.lines.forEach(L=>{
     if(L.bank)return;
@@ -1081,7 +1100,7 @@ async function startReview(text){
     const nc=parse(cd.closing).getDate(),nd=parse(cd.due).getDate();
     if(c.cut!==nc||c.due!==nd){fixed=`ตัด ${nc}, due ${nd}`;c.cut=nc;c.due=nd;}
   }
-  const r=runMatch(V.b.cardId,parsed);
+  const r=runMatch(V.b.cardId,parsed,cd&&cd.closing);
   V.b={...V.b,step:'review',lines:parsed.lines,queue:r.queue,i:0,
        matched:r.matched,reservedSum:r.reservedSum,total:parsed.total||'',added:0,flagged:0,
        closing:cd&&cd.closing,due:cd&&cd.due,fixed};
@@ -1125,6 +1144,8 @@ document.addEventListener('change',async e=>{
   if(!S.cards)S=fresh();
   if(!S.pw)S.pw={};
   if(S.pwDate===undefined)S.pwDate='';
+  const fixed=repairOpen();
+  if(fixed)setTimeout(()=>toast('Cleaned up '+fixed+' mismatched purchase'+(fixed>1?'s':'')),600);
   S.cards=CARDS.map(d=>{const o=(S.cards||[]).find(x=>x.id===d.id)||{};return{...d,cut:o.cut??d.cut,due:o.due??d.due}});
   draw();
 })();
