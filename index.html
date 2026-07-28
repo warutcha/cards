@@ -113,6 +113,14 @@ function dueFor(c,closing){
   return t;
 }
 const cycKey=(c,dateStr)=>c.id+'|'+iso(closingFor(c,dateStr));
+/* how many of this card's cut-offs have gone by since a purchase */
+function cyclesSince(c,startDate){
+  let n=0,d=closingFor(c,startDate),guard=0;
+  while(parse(iso(d))<parse(today())&&guard++<120){
+    n++;d=clampDay(d.getFullYear(),d.getMonth()+1,c.cut);
+  }
+  return n;
+}
 function daysTo(dstr){return Math.round((parse(dstr)-parse(today()))/864e5)}
 const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const shortDate=s=>{const d=parse(s);return d.getDate()+' '+MON[d.getMonth()]};
@@ -474,7 +482,13 @@ function vBill(){
     </div>
     <button class="btn" data-act="qadd">Yes, add it to my notes</button>
     <div class="sp"></div>
-    <button class="btn ghost" data-act="qskip">Not mine — flag it</button>`;
+    <button class="btn ghost" data-act="qskip">Not mine — flag it</button>
+    ${b.queue.length-b.i>1?`<div class="sp"></div>
+    <div class="mut" style="text-align:center;margin-top:10px">${b.queue.length-b.i} left to go through</div>
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="qaddall">Add all ${b.queue.length-b.i} — already handled</button>
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="qskipall">Skip all ${b.queue.length-b.i}</button>`:''}`;
   }
   return vBillDone();
 }
@@ -500,7 +514,15 @@ function vBillDone(){
     <input id="btot" inputmode="decimal" value="${b.total||''}" placeholder="0.00">
     <div class="mut" style="margin-top:8px">You'd set aside ${B2(b.reservedSum||0)} for this cycle.</div>
   </div>
-  ${thin?'':`<button class="btn" data-act="closecycle">Close this cycle</button>`}
+  ${thin?'':`
+  <button class="tile" style="width:100%;text-align:left;padding:14px;background:${
+    b.paidAlready?(dark()?'#1D9E7526':'#E1F5EE'):'transparent'};border:1.5px solid ${
+    b.paidAlready?'#1D9E75':'var(--line2)'}" data-act="togglepaid">
+    <div style="font-size:14px;font-weight:600;color:${b.paidAlready?(dark()?'#5DCAA5':'#085041'):'var(--tx)'}">
+      ${b.paidAlready?'✓ ':''}I've already paid this bill</div>
+    <div class="mut" style="margin-top:3px">Files it straight to History instead of asking you to pay it. Leaves the jar alone.</div>
+  </button>
+  <button class="btn" data-act="closecycle">${b.paidAlready?'File it away':'Close this cycle'}</button>`}
   <div class="sp"></div><button class="btn ghost sm" data-go="bill">Start over</button>`;
 }
 
@@ -538,6 +560,9 @@ function vSettings(){
     <button class="btn ghost sm" data-act="savepwdate">Save</button>
     <div class="sp"></div>
     <button class="btn ghost sm" data-act="forgetpw">Forget saved passwords</button></div>
+  <div class="card"><div class="nm">แบ่ง plans</div>
+    <div class="mut" style="margin:6px 0 10px">${activePlans().length} still running. If an old purchase is showing payments it has already made, recheck them against the dates.</div>
+    <button class="btn ghost sm" data-act="recalcplans">Recheck plan progress</button></div>
   <div class="card"><div class="nm">Back up</div>
     <div class="mut" style="margin:6px 0 10px">Everything lives on this phone only. Save a copy somewhere safe.</div>
     <button class="btn ghost sm" data-act="export">Download a backup</button>
@@ -596,7 +621,8 @@ function applyNotes(rows){
     const key=cycKey(c,r.date);ensureCycle(key);
     if(r.tag==='แบ่งแล้ว'&&c.split){
       S.plans.push({id:uid(),cardId:c.id,title:r.note,total:r.amt,months:c.split,
-        monthly:+(r.amt/c.split).toFixed(2),start:r.date,paid:0});
+        monthly:+(r.amt/c.split).toFixed(2),start:r.date,
+        paid:Math.min(c.split,cyclesSince(c,r.date)),est:true});
       plans++;
     }
     S.txns.push({id:uid(),cardId:r.cardId,date:r.date,note:r.note,actual:null,
@@ -923,6 +949,18 @@ document.addEventListener('click',async e=>{
     toast('Saved');return draw();
   }
   if(a==='forgetpw'){S.pw={};await save();toast('Forgotten');return draw();}
+  if(a==='recalcplans'){
+    let n=0;
+    S.plans.forEach(p=>{
+      if(p.est===false)return;
+      const c=card(p.cardId);
+      const was=p.paid;
+      p.paid=Math.min(p.months,cyclesSince(c,p.start));
+      if(p.paid!==was)n++;
+    });
+    await save();toast(n?'Fixed '+n+' plan'+(n>1?'s':''):'Nothing to change');
+    return draw();
+  }
   if(a==='export'){
     const b=new Blob([JSON.stringify(S,null,2)],{type:'application/json'});
     const u=URL.createObjectURL(b),el=document.createElement('a');
@@ -959,6 +997,31 @@ document.addEventListener('click',async e=>{
     await save();return draw();
   }
   if(a==='qskip'){V.b.flagged=(V.b.flagged||0)+1;V.b.i++;return draw();}
+  if(a==='qaddall'){
+    const b=V.b,c=card(b.cardId);
+    for(let k=b.i;k<b.queue.length;k++){
+      const q=b.queue[k];
+      const key=cycKey(c,q.date);ensureCycle(key);
+      if(q.seq&&q.of){
+        S.plans.push({id:uid(),cardId:c.id,title:q.desc,total:+(q.amt*q.of).toFixed(2),
+          months:q.of,monthly:q.amt,start:q.date,paid:q.seq,est:false});
+      }
+      S.txns.push({id:uid(),cardId:c.id,date:q.date,note:q.desc,actual:q.amt,
+        reserved:up(q.amt,autoStep(q.amt)),moved:true,cyc:key});
+      b.added=(b.added||0)+1;b.reservedSum+=up(q.amt,autoStep(q.amt));
+    }
+    b.i=b.queue.length;
+    await save();return draw();
+  }
+  if(a==='qskipall'){
+    V.b.flagged=(V.b.flagged||0)+(V.b.queue.length-V.b.i);
+    V.b.i=V.b.queue.length;return draw();
+  }
+  if(a==='togglepaid'){
+    const t=document.getElementById('btot');
+    if(t)V.b.total=t.value;
+    V.b.paidAlready=!V.b.paidAlready;return draw();
+  }
   if(a==='closecycle'){
     const b=V.b,c=card(b.cardId);
     const tot=Number((document.getElementById('btot').value||'0').replace(/,/g,''));
@@ -967,11 +1030,14 @@ document.addEventListener('click',async e=>{
     const key=c.id+'|'+closing;
     const cy=ensureCycle(key);
     if(b.due)cy.due=b.due;
-    cy.total=tot;cy.status='billed';
+    cy.total=tot;
     S.txns.filter(t=>t.cardId===c.id&&(!cycleOf(t)||cycleOf(t).status==='open')).forEach(t=>{
       if(parse(t.date)<=parse(closing))t.cyc=key;
     });
-    await save();toast('Cycle closed — it\'s on your home screen to pay');
+    if(b.paidAlready){cy.status='paid';cy.paidOn=today();
+      S.txns.filter(t=>t.cyc===key).forEach(t=>t.moved=true);
+      await save();toast('Filed away');
+    }else{cy.status='billed';await save();toast('Cycle closed — it\'s on your home screen to pay');}
     return go('home');
   }
 });
