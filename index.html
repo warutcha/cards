@@ -2,6 +2,9 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Cards</title>
 <style>
 :root{
@@ -82,6 +85,7 @@ async function save(){
   return ok;
 }
 
+const BUILD='v4 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -217,7 +221,8 @@ function nav(cur){
 
 /* ---------- setup ---------- */
 function vSetup(){
-  return `<h1>Let's set up</h1>
+  return `<div class="mut" style="text-align:right">${BUILD}</div>
+  <h1>Let's set up</h1>
   <div class="card">
     <div class="nm">Your cards</div>
     <div class="mut" style="margin:6px 0 10px">Dates come from your statements. Every time you upload one, the app checks them again and corrects itself — you never type these.</div>
@@ -570,6 +575,7 @@ function vSettings(){
     <div class="mut">Restore from a backup file — this replaces everything currently here.</div>
     <div class="sp"></div>
     <input type="file" id="restore" accept="application/json,.json" style="padding:10px"></div>
+  <div class="mut" style="text-align:center;padding:10px 0">Cards ${BUILD}</div>
   ${nav('settings')}`;
 }
 
