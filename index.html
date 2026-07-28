@@ -56,6 +56,14 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:10px}
 .bar{display:flex;height:12px;border-radius:8px;overflow:hidden;gap:2px;margin:10px 0}
 .hide{display:none}
+.strip{border-radius:14px;padding:14px 15px;display:flex;justify-content:space-between;
+  align-items:center;font-size:14px;font-weight:600;margin-bottom:9px}
+.strip:active{opacity:.7}
+.chip{display:inline-block;font-size:11px;font-weight:600;padding:3px 9px;border-radius:9px}
+.grip{font-size:19px;color:var(--tx3);letter-spacing:1px;padding:8px 4px;touch-action:none;cursor:grab}
+.dot{width:15px;height:15px;border-radius:50%;flex:none}
+.swatch{width:62px;height:62px;border-radius:50%;border:2px solid var(--line2);flex:none;padding:0;overflow:hidden}
+.drag{display:flex;align-items:center;gap:12px;padding:12px 0}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:26px;background:var(--ink);color:var(--onink);
   padding:12px 20px;border-radius:14px;font-size:14px;font-weight:600;z-index:50;max-width:90%}
 .jar{width:132px;height:158px;border:2px solid var(--line2);border-radius:22px;overflow:hidden;
@@ -85,7 +93,7 @@ async function save(){
   return ok;
 }
 
-const BUILD='v5 · 29 Jul';
+const BUILD='v6 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -96,9 +104,18 @@ const CARDS=[
  {id:'cxjcb',name:'CardX JCB',      cut:23, due:12, split:4, c:'#D4537E', t:'#FBEAF0', d:'#72243E'}
 ];
 const card=id=>S.cards.find(c=>c.id===id)||CARDS.find(c=>c.id===id);
+const visibleCards=()=>S.cards.filter(c=>!c.hidden);
 function dark(){return matchMedia('(prefers-color-scheme:dark)').matches}
-function tint(c){return dark()?c.c+'26':c.t}
-function ontint(c){return dark()?c.c:c.d}
+/* any colour the person picks has to stay readable in both modes, so the
+   background tint and the text shade are derived from it rather than stored */
+function rgbOf(h){h=String(h||'#888888').replace('#','');
+  if(h.length===3)h=h.split('').map(x=>x+x).join('');
+  return [0,2,4].map(i=>parseInt(h.substr(i,2),16)||0);}
+function mixTo(rgb,to,t){return rgb.map((v,i)=>Math.round(v+(to[i]-v)*t))}
+function toHex(a){return '#'+a.map(v=>Math.max(0,Math.min(255,v)).toString(16).padStart(2,'0')).join('')}
+function tint(c){return dark()?(c.c+'26'):toHex(mixTo(rgbOf(c.c),[255,255,255],0.88))}
+function ontint(c){return dark()?toHex(mixTo(rgbOf(c.c),[255,255,255],0.35))
+                               :toHex(mixTo(rgbOf(c.c),[0,0,0],0.55))}
 
 /* ---------------- dates ---------------- */
 const D=n=>String(n).padStart(2,'0');
@@ -177,6 +194,16 @@ function openReserved(){
                .reduce((s,t)=>s+(t.reserved||0),0);
 }
 function activePlans(){return S.plans.filter(p=>p.paid<p.months)}
+/* what this card will bill when the cycle closes: what you logged plus the
+   แบ่ง slices the bank will add on its own */
+function cardCycle(cardId){
+  const c=card(cardId);
+  const txns=S.txns.filter(t=>{const cy=cycleOf(t);return t.cardId===cardId&&(!cy||cy.status==='open')});
+  const spent=txns.reduce((s,t)=>s+t.reserved,0);
+  const plans=activePlans().filter(p=>p.cardId===cardId&&cycKey(c,p.start)!==cycKey(c,today()));
+  const inst=plans.reduce((s,p)=>s+p.monthly,0);
+  return{txns,spent,plans,inst,total:spent+inst};
+}
 function planTodo(){
   return activePlans().filter(p=>{
     const c=card(p.cardId),k=cycKey(c,today());
@@ -219,6 +246,8 @@ function draw(){
   else if(v==='card')h=vCard();
   else if(v==='jar')h=vJar();
   else if(v==='bill')h=vBill();
+  else if(v==='cards')h=vCards();
+  else if(v==='cardedit')h=vCardEdit();
   else if(v==='history')h=vHistory();
   else if(v==='settings')h=vSettings();
   app().innerHTML=h;
@@ -272,58 +301,46 @@ function vSetup(){
 /* ---------- home ---------- */
 function vHome(){
   const bills=S.cycles.filter(c=>c.status==='billed').sort((a,b)=>a.due<b.due?-1:1);
-  let h='';
   const n=new Date();
-  h+=`<div class="lbl">${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][n.getDay()]}, ${n.getDate()} ${MON[n.getMonth()]}</div>`;
-  if(bills.length){
-    const b=bills[0],c=card(b.cardId),d=daysTo(b.due);
-    h+=`<div class="tile" style="background:${tint(c)};margin-top:10px">
-      <div class="nm" style="color:${ontint(c)}">Pay ${esc(c.name)} ${d<0?'— '+(-d)+' days late':d===0?'today':'in '+d+' day'+(d>1?'s':'')}</div>
-      <div class="big" style="color:${ontint(c)}">${B2(b.total)}</div>
-      <div class="mut" style="color:${ontint(c)};opacity:.8">due ${shortDate(b.due)}</div>
-      <div class="sp"></div>
-      <button class="btn sm" style="background:${c.c};color:#fff" data-pay="${b.key}">Mark as paid</button>
+  let h=`<div class="lbl">${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][n.getDay()]}, ${n.getDate()} ${MON[n.getMonth()]}</div>`;
+  h+='<div class="card" style="padding:4px 16px;margin-top:12px">';
+  const vis=visibleCards();
+  vis.forEach((c,i)=>{
+    const cc=cardCycle(c.id);
+    const close=iso(closingFor(c,today()));
+    const bill=bills.find(b=>b.cardId===c.id);
+    const bits=[];
+    if(cc.txns.length)bits.push(cc.txns.length+' item'+(cc.txns.length>1?'s':''));
+    if(cc.plans.length)bits.push(cc.plans.length+' แบ่ง');
+    h+=`<div style="padding:12px 0${i?';border-top:1px solid var(--line)':''}" data-card="${c.id}">
+      <div class="row"><span class="nm" style="color:${c.c}">${esc(c.name)}</span>
+        <span class="nm">${cc.total?B(cc.total):'—'}</span></div>
+      ${cc.inst?`<div style="font-size:12px;color:var(--tx2);margin-top:3px">${B(cc.spent)} spent &nbsp;+&nbsp; ${B(cc.inst)} แบ่ง</div>`:''}
+      <div class="row" style="margin-top:2px"><span class="mut">ตัด ${c.cut} · closes ${shortDate(close)}</span>
+        <span class="mut">${bits.length?bits.join(' · '):'nothing yet'}</span></div>
+      ${bill?`<div style="margin-top:7px"><span class="chip" style="background:${dark()?'#BA751733':'#FAEEDA'};color:${dark()?'#EF9F27':'#633806'}">${B2(bill.total)} to pay · ${shortDate(bill.due)}</span></div>`:''}
     </div>`;
-    if(bills.length>1){
-      h+=`<div class="mut" style="margin:-4px 0 12px">Then ${bills.slice(1).map(b=>esc(card(b.cardId).name)+' on '+shortDate(b.due)).join(', ')}</div>`;
-    }
-  }else{
-    h+=`<div class="tile" style="background:var(--card);border:1px solid var(--line);margin-top:10px">
-      <div class="mid">Nothing to pay right now</div>
-      <div class="mut" style="margin-top:4px">Upload a statement when one arrives and it'll show up here.</div></div>`;
-  }
+  });
+  h+='</div>';
+  h+=`<button class="btn" data-go="add" style="padding:19px">+&nbsp; Add a purchase</button>`;
+
   const nm=notMoved();
   if(nm.length){
     const tot=nm.reduce((s,t)=>s+t.reserved,0);
-    h+=`<div class="tile" style="background:${dark()?'#BA751726':'#FAEEDA'}">
-      <div class="nm" style="color:${dark()?'#EF9F27':'#633806'}">${nm.length} purchase${nm.length>1?'s':''} not moved to the jar</div>
-      <div class="mid" style="color:${dark()?'#EF9F27':'#633806'};margin-top:2px">${B(tot)}</div>
-      <div class="sp"></div>
-      <button class="btn sm" style="background:#BA7517;color:#fff" data-act="moveall">Move it now</button></div>`;
+    h+=`<div class="strip" style="background:${dark()?'#BA751726':'#FAEEDA'};color:${dark()?'#EF9F27':'#633806'}"
+      data-act="moveall"><span>Move ${B(tot)} to the jar</span><span>→</span></div>`;
   }
   const pt=planTodo();
   if(pt.length){
     const tot=pt.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
-    h+=`<div class="tile" style="background:${dark()?'#7F77DD26':'#EEEDFE'}">
-      <div class="nm" style="color:${dark()?'#A9A2F5':'#3C3489'}">${pt.length} แบ่ง payment${pt.length>1?'s':''} due this cycle</div>
-      <div class="mut" style="color:${dark()?'#A9A2F5':'#3C3489'};opacity:.9">${
-        pt.slice(0,4).map(p=>esc(p.title)+' '+B2(p.monthly)+' ('+(p.paid+1)+' of '+p.months+')').join(' · ')}</div>
-      <div class="sp"></div>
-      <button class="btn sm" style="background:#7F77DD;color:#fff" data-act="moveplans">Move ${B(tot)}</button></div>`;
+    h+=`<div class="strip" style="background:${dark()?'#7F77DD26':'#EEEDFE'};color:${dark()?'#A9A2F5':'#3C3489'}"
+      data-act="moveplans"><span>${pt.length} แบ่ง payment${pt.length>1?'s':''} · ${B(tot)}</span><span>→</span></div>`;
   }
-  h+='<div class="card" style="padding:8px 16px">';
-  S.cards.forEach(c=>{
-    const open=S.txns.filter(t=>{const cy=cycleOf(t);return t.cardId===c.id&&(!cy||cy.status==='open')});
-    const sum=open.reduce((s,t)=>s+t.reserved,0);
-    const close=iso(closingFor(c,today()));
-    h+=`<div class="item" data-card="${c.id}" style="cursor:pointer">
-      <div><div class="nm" style="color:${c.c}">${esc(c.name)}</div>
-      <div class="mut">ตัด ${c.cut} · closes ${shortDate(close)}</div></div>
-      <div style="text-align:right"><div class="nm">${sum?B(sum):'—'}</div>
-      <div class="mut">${open.length?open.length+' item'+(open.length>1?'s':''):'nothing yet'}</div></div></div>`;
+  bills.forEach(b=>{
+    const c=card(b.cardId),d=daysTo(b.due);
+    h+=`<div class="strip" style="background:${tint(c)};color:${ontint(c)}" data-pay="${b.key}">
+      <span>Pay ${esc(c.name)} ${B2(b.total)} · ${d<0?(-d)+' days late':d===0?'today':d+' day'+(d>1?'s':'')}</span><span>→</span></div>`;
   });
-  h+='</div>';
-  h+=`<button class="btn" data-go="add" style="padding:21px">+  Add a purchase</button>`;
   return h+nav('home');
 }
 
@@ -343,7 +360,7 @@ function vAdd(){
   const c=V.cardId?card(V.cardId):null;
   return `<button class="back" data-go="home">‹ Back</button>
   <div class="lbl" style="margin:0 0 8px">Which card?</div>
-  <div class="grid2">${S.cards.map(x=>`<button class="ct ${V.cardId===x.id?'':'off'}"
+  <div class="grid2">${visibleCards().map(x=>`<button class="ct ${V.cardId===x.id?'':'off'}"
      style="${V.cardId===x.id?`background:${tint(x)};color:${ontint(x)};border-color:${x.c}`:''}"
      data-pick="${x.id}">${esc(x.name)}</button>`).join('')}</div>
   <div class="sp"></div>
@@ -391,33 +408,44 @@ function vSplit(){
 function vCard(){
   const c=card(V.cardId);
   const close=closingFor(c,today());
-  const open=S.txns.filter(t=>{const cy=cycleOf(t);return t.cardId===c.id&&(!cy||cy.status==='open')})
-                   .sort((a,b)=>a.date<b.date?1:-1);
-  const sum=open.reduce((s,t)=>s+t.reserved,0);
-  const plans=activePlans().filter(p=>p.cardId===c.id);
+  const cc=cardCycle(c.id);
+  const txns=cc.txns.slice().sort((a,b)=>a.date<b.date?1:-1);
   const bill=S.cycles.find(x=>x.cardId===c.id&&x.status==='billed');
   let h=`<button class="back" data-go="home">‹ Back</button>
   <h1 style="color:${c.c}">${esc(c.name)}</h1>
-  <div class="mut" style="margin-top:-8px">ตัด ${c.cut} · this cycle closes ${shortDate(iso(close))} · due ${shortDate(iso(dueFor(c,close)))}</div>
-  <div class="sp"></div>`;
-  if(bill)h+=`<div class="tile" style="background:${tint(c)}">
-    <div class="nm" style="color:${ontint(c)}">Bill from ${shortDate(bill.closing)}</div>
-    <div class="mid" style="color:${ontint(c)}">${B2(bill.total)}</div>
-    <div class="mut" style="color:${ontint(c)};opacity:.8">due ${shortDate(bill.due)}</div></div>`;
-  h+=`<div class="card"><div class="row"><div class="nm">This cycle</div><div class="nm">${B(sum)}</div></div>
+  <div class="mut" style="margin-top:-8px">ตัด ${c.cut} · closes ${shortDate(iso(close))} · due ${shortDate(iso(dueFor(c,close)))}</div>
+  <div class="sp"></div>
+  <div class="tile" style="background:${tint(c)}">
+    <div style="font-size:13px;color:${ontint(c)}">Bill so far this cycle</div>
+    <div class="big" style="color:${ontint(c)};font-size:32px">${B2(cc.total)}</div>
+    ${cc.inst?`<div style="font-size:12px;color:${ontint(c)};opacity:.85;margin-top:3px">
+      ${B(cc.spent)} spent &nbsp;+&nbsp; ${B(cc.inst)} แบ่ง</div>`:''}
+  </div>`;
+  if(bill)h+=`<div class="strip" style="background:${dark()?'#BA751726':'#FAEEDA'};color:${dark()?'#EF9F27':'#633806'}"
+    data-pay="${bill.key}"><span>Still to pay ${B2(bill.total)} · due ${shortDate(bill.due)}</span><span>→</span></div>`;
+
+  h+=`<div class="card"><div class="row"><div class="nm">What you spent</div><div class="nm">${B(cc.spent)}</div></div>
     <div class="sp"></div>`;
-  h+= open.length?open.map(t=>`<div class="item"><div><div>${esc(t.note||'—')}</div>
+  h+= txns.length?txns.map(t=>`<div class="item"><div><div>${esc(t.note||'—')}</div>
       <div class="mut">${shortDate(t.date)}${t.moved?'':' · not moved yet'}</div></div>
       <div style="text-align:right"><div>${B(t.reserved)}</div>
       <button class="mut" data-del="${t.id}" style="text-decoration:underline">remove</button></div></div>`).join('')
-    :'<div class="mut">Nothing on this card yet.</div>';
+    :'<div class="mut">Nothing logged on this card yet.</div>';
   h+='</div>';
-  if(plans.length){
-    h+='<div class="card"><div class="nm">แบ่ง running</div><div class="sp"></div>';
-    plans.forEach(p=>{h+=`<div class="item"><div><div>${esc(p.title)}</div>
-      <div class="mut">paid ${p.paid} of ${p.months} · total ${B(p.total)}</div></div>
-      <div>${B2(p.monthly)}</div></div>`});
+
+  if(cc.plans.length){
+    h+=`<div class="card"><div class="row"><div class="nm">แบ่ง billed this cycle</div><div class="nm">${B(cc.inst)}</div></div>
+      <div class="sp"></div>`;
+    cc.plans.forEach(p=>{
+      const last=p.paid+1>=p.months;
+      h+=`<div class="item"><div><div>${esc(p.title)}</div>
+        <div class="mut">${last?'last one · ':''}${p.paid+1} of ${p.months} · total ${B(p.total)}</div></div>
+        <div>${B2(p.monthly)}</div></div>`;
+    });
     h+='</div>';
+    const after=cc.plans.filter(p=>p.paid+1<p.months).length;
+    h+=`<div class="mut">${after?after+' แบ่ง carr'+(after>1?'y':'ies')+' on after this cycle.'
+      :'All แบ่ง finish this cycle, so next month is only what you spend.'}</div>`;
   }
   return h;
 }
@@ -462,7 +490,7 @@ function vBill(){
   if(b.step==='pick'){
     return `<h1>Check a bill</h1>
     <div class="lbl" style="margin-bottom:8px">Which card is this statement for?</div>
-    <div class="grid2">${S.cards.map(x=>`<button class="ct ${b.cardId===x.id?'':'off'}"
+    <div class="grid2">${visibleCards().map(x=>`<button class="ct ${b.cardId===x.id?'':'off'}"
       style="${b.cardId===x.id?`background:${tint(x)};color:${ontint(x)};border-color:${x.c}`:''}"
       data-bpick="${x.id}">${esc(x.name)}</button>`).join('')}</div>
     <div class="sp"></div><div class="sp"></div>
@@ -542,6 +570,62 @@ function vBillDone(){
   <div class="sp"></div><button class="btn ghost sm" data-go="bill">Start over</button>`;
 }
 
+/* ---------- your cards ---------- */
+function vCards(){
+  let h=`<button class="back" data-go="settings">‹ Settings</button>
+  <h1>Your cards</h1>
+  <div class="mut" style="margin-top:-8px">Drag the handle to reorder them. Tap a card to rename it or change its colour.</div>
+  <div class="sp"></div>
+  <div class="card" style="padding:4px 16px">`;
+  S.cards.forEach((c,i)=>{
+    h+=`<div class="drag" data-cardrow="${i}" style="${i?'border-top:1px solid var(--line);':''}${
+      dragI===i?'opacity:.45;':''}${c.hidden?'opacity:.5;':''}">
+      <span class="grip" data-grip="${i}">≡</span>
+      <span class="dot" style="background:${c.c}"></span>
+      <div style="flex:1" data-edit="${c.id}">
+        <div class="nm">${esc(c.name)}${c.hidden?' <span class="mut">· hidden</span>':''}</div>
+        <div class="mut">ตัด ${c.cut} · due ${c.due}${c.split?' · แบ่ง '+c.split+'×':''}</div>
+      </div>
+      <span class="mut" data-edit="${c.id}">›</span></div>`;
+  });
+  h+=`</div>
+  <div class="mut">This order is used on your home screen and on the Add a purchase screen.</div>`;
+  return h;
+}
+function vCardEdit(){
+  const c=card(V.cardId);
+  const others=[...new Set(S.cards.filter(x=>x.id!==c.id).map(x=>x.c))];
+  return `<button class="back" data-go="cards">‹ Your cards</button>
+  <h1 style="color:${c.c}">${esc(c.name)}</h1>
+  <div class="card">
+    <div class="mut" style="margin-bottom:8px">Name</div>
+    <input id="cname" value="${esc(c.name)}">
+  </div>
+  <div class="card">
+    <div class="mut" style="margin-bottom:12px">Colour</div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <input type="color" id="ccol" class="swatch" value="${c.c}">
+      <div><div style="font-size:15px">Tap to pick any colour</div>
+      <div class="mut" id="chex">${c.c.toUpperCase()}</div></div>
+    </div>
+    <div class="dv" style="border-top:1px solid var(--line);margin:14px 0"></div>
+    <div class="mut" style="margin-bottom:10px">Used on your other cards</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">
+      ${others.map(x=>`<button class="dot" data-pick-col="${x}" style="width:30px;height:30px;background:${x}"></button>`).join('')}
+    </div>
+  </div>
+  <div class="card">
+    <div class="item"><div>ตัด</div><div>${c.cut}</div></div>
+    <div class="item"><div>Due</div><div>${c.due}</div></div>
+    <div class="item"><div>แบ่ง</div><div>${c.split?c.split+'× above ฿1,000':'not available'}</div></div>
+    <div class="mut" style="margin-top:10px">These come from your statements and correct themselves each time you upload one.</div>
+  </div>
+  <button class="btn" data-act="savecard">Save</button>
+  <div class="sp"></div>
+  <button class="btn ghost sm" data-act="togglehide">${c.hidden?'Show this card again':'Hide this card'}</button>
+  <div class="mut" style="margin-top:10px">Hiding keeps everything in History — it just drops the card off your home screen and the Add screen.</div>`;
+}
+
 /* ---------- history / settings ---------- */
 function vHistory(){
   const done=S.cycles.filter(c=>c.status==='paid').sort((a,b)=>a.closing<b.closing?1:-1);
@@ -557,14 +641,15 @@ function vHistory(){
 }
 function vSettings(){
   return `<h1>Settings</h1>
-  <div class="card">${S.cards.map(c=>`<div class="item">
-    <div><div class="nm" style="color:${c.c}">${esc(c.name)}</div>
-    <div class="mut">${c.split?'แบ่ง '+c.split+'×':'no แบ่ง'}</div></div>
-    <div style="display:flex;gap:6px;align-items:center">
-    <span class="mut">ตัด</span><input data-cut="${c.id}" value="${c.cut}" inputmode="numeric" style="width:54px;padding:8px;text-align:center">
-    <span class="mut">due</span><input data-due="${c.id}" value="${c.due}" inputmode="numeric" style="width:54px;padding:8px;text-align:center">
-    </div></div>`).join('')}
-    <div class="sp"></div><button class="btn ghost sm" data-act="savecards">Save changes</button></div>
+  <div class="card" style="padding:4px 16px">
+    ${S.cards.map((c,i)=>`<div class="drag" data-edit="${c.id}" style="${i?'border-top:1px solid var(--line);':''}${c.hidden?'opacity:.5;':''}">
+      <span class="dot" style="background:${c.c}"></span>
+      <div style="flex:1"><div class="nm">${esc(c.name)}${c.hidden?' <span class="mut">· hidden</span>':''}</div>
+      <div class="mut">ตัด ${c.cut} · due ${c.due}${c.split?' · แบ่ง '+c.split+'×':''}</div></div>
+      <span class="mut">›</span></div>`).join('')}
+  </div>
+  <button class="btn ghost sm" data-go="cards">Reorder or edit your cards</button>
+  <div class="sp"></div><div class="sp"></div>
   <div class="card"><div class="nm">Bring in more notes</div>
     <div class="mut" style="margin:6px 0 10px">Safe to paste the same thing twice — it won't duplicate.</div>
     <textarea id="notes"></textarea><div class="sp"></div>
@@ -869,11 +954,48 @@ async function autoOpen(bytes,cardId){
   return null;
 }
 
+/* ---------------- drag to reorder ---------------- */
+let dragI=null;
+document.addEventListener('pointerdown',e=>{
+  const g=e.target.closest('[data-grip]');
+  if(!g)return;
+  e.preventDefault();
+  dragI=+g.dataset.grip;
+  draw();
+});
+document.addEventListener('pointermove',e=>{
+  if(dragI==null)return;
+  e.preventDefault();
+  const rows=[...document.querySelectorAll('[data-cardrow]')];
+  const over=rows.findIndex(r=>{
+    const b=r.getBoundingClientRect();
+    return e.clientY>=b.top&&e.clientY<=b.bottom;
+  });
+  if(over>=0&&over!==dragI){
+    const [m]=S.cards.splice(dragI,1);
+    S.cards.splice(over,0,m);
+    dragI=over;draw();
+  }
+},{passive:false});
+document.addEventListener('pointerup',async()=>{
+  if(dragI==null)return;
+  dragI=null;await save();draw();
+});
+document.addEventListener('pointercancel',()=>{dragI=null;draw();});
+
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip]');
+  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col]');
   if(!t)return;
   const g=t.dataset;
+  if(g.edit)return go('cardedit',{cardId:g.edit});
+  if(g.pickCol){
+    const el=document.getElementById('ccol');
+    if(el)el.value=g.pickCol;
+    const hx=document.getElementById('chex');
+    if(hx)hx.textContent=g.pickCol.toUpperCase();
+    return;
+  }
   if(g.chip!==undefined){
     const n=document.getElementById('note');if(n)V.note=n.value;
     const d=document.getElementById('dt');if(d)V.date=d.value;
@@ -964,10 +1086,19 @@ document.addEventListener('click',async e=>{
     }
     S.setup=true;await save();return go('home');
   }
-  if(a==='savecards'){
-    document.querySelectorAll('[data-cut]').forEach(i=>{const c=card(i.dataset.cut);const v=+i.value;if(v>=1&&v<=31)c.cut=v});
-    document.querySelectorAll('[data-due]').forEach(i=>{const c=card(i.dataset.due);const v=+i.value;if(v>=1&&v<=31)c.due=v});
-    await save();toast('Saved');return draw();
+  if(a==='savecard'){
+    const c=card(V.cardId);
+    const nm2=document.getElementById('cname').value.trim();
+    const col=document.getElementById('ccol').value;
+    if(nm2)c.name=nm2;
+    if(/^#[0-9a-f]{6}$/i.test(col))c.c=col;
+    await save();toast('Saved');return go('cards');
+  }
+  if(a==='togglehide'){
+    const c=card(V.cardId);
+    c.hidden=!c.hidden;
+    await save();toast(c.hidden?'Hidden from your home screen':'Showing again');
+    return draw();
   }
   if(a==='savepwdate'){
     S.pwDate=document.getElementById('pwdate').value||'';await save();
@@ -1146,7 +1277,11 @@ document.addEventListener('change',async e=>{
   if(S.pwDate===undefined)S.pwDate='';
   const fixed=repairOpen();
   if(fixed)setTimeout(()=>toast('Cleaned up '+fixed+' mismatched purchase'+(fixed>1?'s':'')),600);
-  S.cards=CARDS.map(d=>{const o=(S.cards||[]).find(x=>x.id===d.id)||{};return{...d,cut:o.cut??d.cut,due:o.due??d.due}});
+  if(!S.cards||!S.cards.length)S.cards=CARDS.map(c=>({...c}));
+  else{
+    CARDS.forEach(d=>{if(!S.cards.some(x=>x.id===d.id))S.cards.push({...d})});
+    S.cards=S.cards.map(x=>{const d=CARDS.find(y=>y.id===x.id)||{};return{...d,...x}});
+  }
   draw();
 })();
 </script>
