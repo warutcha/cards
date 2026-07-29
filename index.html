@@ -95,7 +95,7 @@ async function save(){
   return ok;
 }
 
-const BUILD='v7 · 29 Jul';
+const BUILD='v8 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -149,7 +149,14 @@ const MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','De
 const shortDate=s=>{const d=parse(s);return d.getDate()+' '+MON[d.getMonth()]};
 
 /* ---------------- money ---------------- */
-const B=n=>'฿'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:2});
+const B=n=>'฿'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:(Number(n)%1?2:0),maximumFractionDigits:2});
+/* the keypad keeps the amount as typed so a trailing dot survives redraws */
+function fmtAmt(str){
+  if(!str)return '0';
+  const i=str.split('.')[0],d=str.split('.')[1];
+  const ip=Number(i||0).toLocaleString('en-US');
+  return d===undefined?ip:ip+'.'+d;
+}
 const B2=n=>'฿'+Number(n||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const up=(n,step)=>Math.ceil(n/step)*step;
 /* small spends round to 10, thousands to 100, ten-thousands to 1,000 */
@@ -445,12 +452,12 @@ function vAdd(){
      data-pick="${x.id}">${esc(x.name)}</button>`).join('')}</div>
   <div class="sp"></div>
   <div class="center" style="margin-top:14px"><div class="lbl">How much?</div>
-    <div class="big" style="font-size:44px">฿${amt?amt.toLocaleString():'0'}</div></div>
+    <div class="big" style="font-size:44px">฿${fmtAmt(V.amt)}</div></div>
   ${amt?`<button class="tile center" style="background:${dark()?'#1D9E7526':'#E1F5EE'};width:100%;padding:12px;margin:10px 0" data-act="rsv">
     <span style="color:${dark()?'#5DCAA5':'#085041'};font-size:14px">Setting aside <b>${B(res)}</b>${res>amt?' — '+B(res-amt)+' to the jar':''} · ${modeLabel(amt,V.rsv)}, tap to change</span></button>`:'<div class="sp"></div>'}
   <div class="keys">
     ${[1,2,3,4,5,6,7,8,9].map(n=>`<button class="key" data-k="${n}">${n}</button>`).join('')}
-    <button class="key" data-k="00">00</button>
+    <button class="key" data-k=".">.</button>
     <button class="key" data-k="0">0</button>
     <button class="key" data-k="del">⌫</button>
   </div>
@@ -1165,8 +1172,15 @@ document.addEventListener('click',async e=>{
   if(g.bpick){V.b.cardId=g.bpick;return draw();}
   if(g.k){
     keepNote();
-    if(g.k==='del')V.amt=(V.amt||'').slice(0,-1);
-    else if((V.amt||'').length<8)V.amt=((V.amt||'')+g.k).replace(/^0+(?=\d)/,'');
+    const cur=V.amt||'';
+    if(g.k==='del')V.amt=cur.slice(0,-1);
+    else if(g.k==='.'){ if(!cur.includes('.'))V.amt=(cur||'0')+'.'; }
+    else{
+      const dot=cur.indexOf('.');
+      if(dot>=0&&cur.length-dot-1>=2)return;          // two satang digits is the limit
+      if(cur.replace('.','').length>=9)return;
+      V.amt=(cur+g.k).replace(/^0+(?=\d)/,'');
+    }
     return draw();
   }
   if(g.pay){
