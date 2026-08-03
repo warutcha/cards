@@ -157,7 +157,8 @@ async function pushUp(){
   syncing=false;
   if(V.view==='sync')draw();
 }
-/* returns 'pulled' | 'same' | 'pushed' | 'error' */
+const weight=d=>((d&&d.txns||[]).length)+((d&&d.cycles||[]).length);
+/* returns 'pulled' | 'same' | 'pushed' | 'blocked' | 'error' */
 async function pullDown(){
   if(!ghOn())return 'off';
   try{
@@ -166,13 +167,18 @@ async function pullDown(){
     const mine=S&&S.updated?new Date(S.updated).getTime():0;
     const theirs=r.data&&r.data.updated?new Date(r.data.updated).getTime():0;
     setCfg({...cfg(),sha:r.sha,last:new Date().toISOString(),err:null});
+    const hereW=weight(S),thereW=weight(r.data);
+    // an empty device must never wipe a copy that has data in it, whatever
+    // the clocks say — and the reverse is a free win, so take it
+    if(hereW===0&&thereW>0){S=r.data;await saveLocal();return 'pulled';}
+    if(thereW===0&&hereW>0){await pushUp();return 'pushed';}
     if(theirs>mine){S=r.data;await saveLocal();return 'pulled';}
     if(mine>theirs){await pushUp();return 'pushed';}
     return 'same';
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v10 · 29 Jul';
+const BUILD='v11 · 4 Aug';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -464,6 +470,12 @@ function nav(cur){
 function vSetup(){
   return `<div class="mut" style="text-align:right">${BUILD}</div>
   <h1>Let's set up</h1>
+  <div class="card" style="border-color:var(--line2)">
+    <div class="nm">Already using this on another device?</div>
+    <div class="mut" style="margin:6px 0 12px">Bring everything across instead of starting again. You'll need your GitHub key.</div>
+    <button class="btn ghost sm" data-go="sync">Bring my data over</button>
+  </div>
+  <div class="mut" style="margin:18px 0 10px">Otherwise, start fresh:</div>
   <div class="card">
     <div class="nm">Your cards</div>
     <div class="mut" style="margin:6px 0 10px">Dates come from your statements. Every time you upload one, the app checks them again and corrects itself — you never type these.</div>
@@ -968,7 +980,7 @@ function agoText(iso){
 function vSync(){
   const c=cfg(),on=ghOn();
   const good=dark()?'#5DCAA5':'#0B6B4F', warn=dark()?'#EF9F27':'#8A5209';
-  let h=`<button class="back" data-go="settings">‹ Settings</button>
+  let h=`<button class="back" data-go="${S.setup?'settings':'setup'}">‹ Back</button>
   <h1>Same data everywhere</h1>
   <div class="mut" style="margin-top:-8px">Keeps one copy online so your phone and your computer always show the same thing — and nothing is lost when you update the app.</div>
   <div class="sp"></div>`;
@@ -1676,7 +1688,14 @@ document.addEventListener('click',async e=>{
       const theirs=r.data&&r.data.updated?new Date(r.data.updated).getTime():0;
       const mine=S.updated?new Date(S.updated).getTime():0;
       setCfg({...cfg(),sha:r.sha,last:new Date().toISOString(),err:null});
-      if(theirs>mine&&(r.data.txns||[]).length){
+      const hereW=weight(S),thereW=weight(r.data);
+      if(hereW===0&&thereW>0){
+        // nothing here, something there — just take it, no question needed
+        S=r.data;await saveLocal();
+        toast('Brought your data down');
+        return go(S.setup?'home':'setup');
+      }
+      if(thereW>0&&hereW>0&&theirs>mine){
         return ask({kind:'pull',title:'There\'s already a copy online',
           sub:'It looks newer than what\'s on this device.',
           rows:[['Online',(r.data.txns||[]).length+' purchases'],
