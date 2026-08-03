@@ -77,25 +77,102 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 /* ---------------- storage ----------------
-   Runs in two places. Inside Claude it uses the artifact store; saved to your
-   phone and opened from the home screen it uses the browser's own storage.  */
+   The browser copy is the fast one and works offline. When sync is set up,
+   the file on GitHub is the real one: pulled on open, pushed after changes. */
 const KEY='cards:v1';
-let mem=null;
-async function load(){
+const CFG='cards:sync';
+let mem=null,syncT=null,syncing=false;
+
+function cfg(){
+  try{return JSON.parse(localStorage.getItem(CFG)||'{}')}catch(e){return{}}
+}
+function setCfg(o){
+  try{localStorage.setItem(CFG,JSON.stringify(o))}catch(e){}
+}
+async function loadLocal(){
   try{const r=await window.storage.get(KEY);if(r&&r.value)return JSON.parse(r.value);}catch(e){}
   try{const t=localStorage.getItem(KEY);if(t)return JSON.parse(t);}catch(e){}
   return mem;
 }
-async function save(){
+async function saveLocal(){
   mem=S;
   const t=JSON.stringify(S);
-  let ok=false;
-  try{await window.storage.set(KEY,t);ok=true;}catch(e){}
-  try{localStorage.setItem(KEY,t);ok=true;}catch(e){}
-  return ok;
+  try{await window.storage.set(KEY,t);}catch(e){}
+  try{localStorage.setItem(KEY,t);}catch(e){}
+}
+async function save(){
+  S.updated=new Date().toISOString();
+  await saveLocal();
+  queueSync();
 }
 
-const BUILD='v8 · 29 Jul';
+/* ---- GitHub ---- */
+const ghOn=()=>{const c=cfg();return !!(c.token&&c.repo)};
+function ghUrl(){
+  const c=cfg();
+  return 'https://api.github.com/repos/'+c.repo+'/contents/'+(c.path||'data.json');
+}
+async function ghGet(){
+  const c=cfg();
+  const r=await fetch(ghUrl(),{headers:{Authorization:'Bearer '+c.token,
+    Accept:'application/vnd.github+json'},cache:'no-store'});
+  if(r.status===404)return{missing:true};
+  if(!r.ok)throw new Error(r.status===401||r.status===403?'key':'http '+r.status);
+  const j=await r.json();
+  const txt=decodeURIComponent(escape(atob((j.content||'').replace(/\n/g,''))));
+  return{sha:j.sha,data:JSON.parse(txt)};
+}
+async function ghPut(obj,sha){
+  const c=cfg();
+  const body={message:'cards '+new Date().toISOString(),
+    content:btoa(unescape(encodeURIComponent(JSON.stringify(obj)))) };
+  if(sha)body.sha=sha;
+  const r=await fetch(ghUrl(),{method:'PUT',headers:{Authorization:'Bearer '+c.token,
+    Accept:'application/vnd.github+json','Content-Type':'application/json'},
+    body:JSON.stringify(body)});
+  if(!r.ok)throw new Error(r.status===409?'conflict':(r.status===401||r.status===403?'key':'http '+r.status));
+  const j=await r.json();
+  return j.content&&j.content.sha;
+}
+function queueSync(){
+  if(!ghOn())return;
+  clearTimeout(syncT);
+  syncT=setTimeout(()=>pushUp().catch(()=>{}),1500);
+}
+async function pushUp(){
+  if(!ghOn()||syncing)return;
+  syncing=true;
+  const c=cfg();
+  try{
+    const sha=await ghPut(S,c.sha);
+    setCfg({...c,sha,last:new Date().toISOString(),err:null});
+  }catch(e){
+    if(String(e.message)==='conflict'){
+      // someone else wrote first — take their sha and try once more
+      try{const r=await ghGet();const sha=await ghPut(S,r.sha);
+        setCfg({...cfg(),sha,last:new Date().toISOString(),err:null});}
+      catch(e2){setCfg({...cfg(),err:String(e2.message)});}
+    }else setCfg({...cfg(),err:String(e.message)});
+  }
+  syncing=false;
+  if(V.view==='sync')draw();
+}
+/* returns 'pulled' | 'same' | 'pushed' | 'error' */
+async function pullDown(){
+  if(!ghOn())return 'off';
+  try{
+    const r=await ghGet();
+    if(r.missing){await pushUp();return 'pushed';}
+    const mine=S&&S.updated?new Date(S.updated).getTime():0;
+    const theirs=r.data&&r.data.updated?new Date(r.data.updated).getTime():0;
+    setCfg({...cfg(),sha:r.sha,last:new Date().toISOString(),err:null});
+    if(theirs>mine){S=r.data;await saveLocal();return 'pulled';}
+    if(mine>theirs){await pushUp();return 'pushed';}
+    return 'same';
+  }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
+}
+
+const BUILD='v10 · 29 Jul';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -179,6 +256,7 @@ const uid=()=>Math.random().toString(36).slice(2,10);
 let S=null,V={view:'home'},toastT=null;
 function fresh(){
   return{v:1,setup:false,jarOpen:0,pwDate:'',pw:{},log:[],quick:['7-Eleven','Shopee Food'],
+         jars:defaultJars(),cashback:[],
          cards:CARDS.map(c=>({...c})),txns:[],plans:[],cycles:[],moves:[]};
 }
 
@@ -213,6 +291,64 @@ function logTime(t){
   return day+', '+D(d.getHours())+':'+D(d.getMinutes());
 }
 
+/* ---------------- accounts ----------------
+   One per spare bank account. Cards paid from the same account share one, and
+   every figure the app tracks is worked out per account rather than overall. */
+function defaultJars(){
+  return[
+   {id:'j_tmrw', name:'TMRW account', cards:['tmrw'],         open:0},
+   {id:'j_cardx',name:'CardX account',cards:['cxup','cxjcb'], open:0},
+   {id:'j_ttb',  name:'TTB account',  cards:['ttb'],          open:0},
+   {id:'j_ktc',  name:'KTC account',  cards:['ktcb','ktcc'],  open:0}
+  ];
+}
+const jars=()=>S.jars||(S.jars=defaultJars());
+const jarOfCard=id=>jars().find(j=>(j.cards||[]).includes(id))||jars()[0];
+function jarBal(j){
+  return (j.open||0)+S.moves.filter(m=>m.jar===j.id)
+    .reduce((s,m)=>s+(m.kind==='in'?m.amt:-m.amt),0);
+}
+function jarOwed(j){
+  return S.cycles.filter(c=>c.status==='billed'&&(j.cards||[]).includes(c.cardId))
+    .reduce((s,c)=>s+(c.total||0),0);
+}
+function jarTodo(j){
+  const t=notMoved().filter(x=>(j.cards||[]).includes(x.cardId));
+  const p=planTodo().filter(x=>(j.cards||[]).includes(x.cardId));
+  return{txns:t,plans:p,
+    amt:t.reduce((s,x)=>s+x.reserved,0)+p.reduce((s,x)=>s+up(x.monthly,autoStep(x.monthly)),0)};
+}
+function jarComing(j){
+  const open=S.txns.filter(t=>{const cy=cycleOf(t);
+    return (j.cards||[]).includes(t.cardId)&&(!cy||cy.status==='open')})
+    .reduce((s,t)=>s+t.reserved,0);
+  const inst=activePlans().filter(p=>(j.cards||[]).includes(p.cardId)
+    &&cycKey(card(p.cardId),p.start)!==cycKey(card(p.cardId),today()))
+    .reduce((s,p)=>s+p.monthly,0);
+  return jarOwed(j)+open+inst;
+}
+
+/* ---------------- cash back ----------------
+   Every card that pays it prints it on the statement, so this is normally
+   automatic. The bank has already deducted it from the bill, so it is only
+   ever recorded — it never moves money.                                    */
+function cbFor(id){return (S.cashback||[]).filter(x=>x.cardId===id)}
+function cbLatest(id){return cbFor(id).sort((a,b)=>a.closing<b.closing?1:-1)[0]}
+function cbYear(id){
+  const y=new Date().getFullYear();
+  const rows=cbFor(id).filter(x=>parse(x.closing).getFullYear()===y);
+  const stated=rows.map(x=>x.year).filter(v=>v!=null);
+  return stated.length?Math.max(...stated):rows.reduce((s,x)=>s+x.cycle,0);
+}
+function cbAll(id){return cbFor(id).reduce((s,x)=>s+x.cycle,0)}
+function setCashback(cardId,closing,cycle,year){
+  S.cashback=S.cashback||[];
+  const i=S.cashback.findIndex(x=>x.cardId===cardId&&x.closing===closing);
+  const row={cardId,closing,cycle};
+  if(year!=null)row.year=year;
+  if(i>=0)S.cashback[i]=row;else S.cashback.push(row);
+}
+
 /* derived */
 const openTxns=()=>S.txns.filter(t=>!cycleOf(t)||cycleOf(t).status==='open');
 function cycleOf(t){return S.cycles.find(c=>c.key===t.cyc)}
@@ -222,9 +358,6 @@ function ensureCycle(key){
     c={key,cardId:cid,closing:close,due:iso(dueFor(cd,parse(close))),status:'open',total:null};
     S.cycles.push(c);}
   return c;
-}
-function jarBalance(){
-  return S.jarOpen+S.moves.reduce((s,m)=>s+(m.kind==='in'?m.amt:-m.amt),0);
 }
 function unpaidBills(){
   return S.cycles.filter(c=>c.status==='billed').reduce((s,c)=>s+(c.total||0),0);
@@ -252,7 +385,6 @@ function planTodo(){
   });
 }
 function planDue(){return activePlans().reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0)}
-function extra(){return jarBalance()-unpaidBills()-openReserved()-planDue()}
 function notMoved(){return S.txns.filter(t=>!t.moved)}
 
 /* a purchase sitting in a cycle that hasn't been billed yet can't have a real
@@ -286,6 +418,11 @@ function draw(){
   else if(v==='split')h=vSplit();
   else if(v==='card')h=vCard();
   else if(v==='jar')h=vJar();
+  else if(v==='jarone')h=vJarOne();
+  else if(v==='jars')h=vJars();
+  else if(v==='sync')h=vSync();
+  else if(v==='jaredit')h=vJarEdit();
+  else if(v==='splitjars')h=vSplitJars();
   else if(v==='bill')h=vBill();
   else if(v==='cards')h=vCards();
   else if(v==='cardedit')h=vCardEdit();
@@ -388,18 +525,12 @@ function vHome(){
   h+='</div>';
   h+=`<button class="btn" data-go="add" style="padding:19px">+&nbsp; Add a purchase</button>`;
 
-  const nm=notMoved();
-  if(nm.length){
-    const tot=nm.reduce((s,t)=>s+t.reserved,0);
+  jars().forEach(j=>{
+    const td=jarTodo(j);
+    if(!td.amt)return;
     h+=`<div class="strip" style="background:${dark()?'#BA751726':'#FAEEDA'};color:${dark()?'#EF9F27':'#633806'}"
-      data-act="moveall"><span>Move ${B(tot)} to the jar</span><span>→</span></div>`;
-  }
-  const pt=planTodo();
-  if(pt.length){
-    const tot=pt.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
-    h+=`<div class="strip" style="background:${dark()?'#7F77DD26':'#EEEDFE'};color:${dark()?'#A9A2F5':'#3C3489'}"
-      data-act="moveplans"><span>${pt.length} แบ่ง payment${pt.length>1?'s':''} · ${B(tot)}</span><span>→</span></div>`;
-  }
+      data-movejar="${j.id}"><span>Move ${B(td.amt)} to ${esc(j.name)}</span><span>→</span></div>`;
+  });
   bills.forEach(b=>{
     const c=card(b.cardId),d=daysTo(b.due);
     h+=`<div class="strip" style="background:${tint(c)};color:${ontint(c)}" data-pay="${b.key}">
@@ -538,41 +669,120 @@ function vCard(){
     h+=`<div class="mut">${after?after+' แบ่ง carr'+(after>1?'y':'ies')+' on after this cycle.'
       :'All แบ่ง finish this cycle, so next month is only what you spend.'}</div>`;
   }
+  const lastCb=cbLatest(c.id),yr=cbYear(c.id),all=cbAll(c.id);
+  h+=`<div class="card">
+    <div class="row"><div class="nm">Cash back</div>
+      <div class="nm" style="color:${dark()?'#5DCAA5':'#0B6B4F'}">${lastCb?B2(lastCb.cycle):'—'}</div></div>
+    ${lastCb?`<div class="mut" style="margin-top:4px">last bill · ${B2(yr)} this year${all>yr+0.001?' · '+B2(all)+' all time':''}</div>`
+           :`<div class="mut" style="margin-top:4px">Nothing recorded yet — it'll come off the next statement.</div>`}
+    <div class="sp"></div>
+    <input id="cbman" inputmode="decimal" placeholder="Got the number early? Enter it">
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="cbmanual">Save cash back</button></div>
+  <div class="card"><div class="item"><div class="mut">Paid from</div>
+    <div>${esc(jarOfCard(c.id).name)}</div></div></div>`;
   return h;
 }
 
 /* ---------- jar ---------- */
 function vJar(){
-  const bal=jarBalance(),bills=unpaidBills(),res=openReserved(),pl=planDue(),ex=extra();
-  const tot=Math.max(bal,1);
-  const pct=n=>Math.max(0,Math.min(100,n/tot*100));
-  const nm=notMoved();
-  let h=`<h1>Your jar</h1>
-  <div class="jar">
-    <div style="height:${pct(bills)}%;background:#378ADD"></div>
-    <div style="height:${pct(res+pl)}%;background:#7F77DD"></div>
-    <div style="height:${pct(Math.max(ex,0))}%;background:#1D9E75"></div>
-  </div>
-  <div class="center"><div class="big">${B2(bal)}</div></div>
-  <div class="sp"></div>
-  <div class="card">
-    <div class="item"><div><span style="color:#378ADD">●</span> Waiting for bills</div><div>${B2(bills)}</div></div>
-    <div class="item"><div><span style="color:#7F77DD">●</span> Set aside for this cycle</div><div>${B2(res+pl)}</div></div>
-    <div class="item"><div><span style="color:#1D9E75">●</span> Extra you've kept</div><div>${B2(ex)}</div></div>
-  </div>`;
-  if(nm.length){
-    const t=nm.reduce((s,x)=>s+x.reserved,0);
-    h+=`<div class="tile" style="background:${dark()?'#BA751726':'#FAEEDA'}">
-      <div class="nm" style="color:${dark()?'#EF9F27':'#633806'}">${nm.length} not moved yet</div>
-      <div class="mut" style="color:${dark()?'#EF9F27':'#633806'};opacity:.9">${nm.slice(0,4).map(x=>esc(x.note||'—')+' '+B(x.reserved)).join(' · ')}</div>
-      <div class="sp"></div>
-      <button class="btn sm" style="background:#BA7517;color:#fff" data-act="moveall">Move ${B(t)}</button></div>`;
-  }
-  h+=`<div class="card"><div class="nm">Adjust the jar</div>
-    <div class="mut" style="margin:6px 0 10px">If the real balance in your bank doesn't match, put the real number here.</div>
-    <input id="realbal" inputmode="decimal" placeholder="${B2(bal)}">
-    <div class="sp"></div><button class="btn ghost sm" data-act="setbal">Set as real balance</button></div>`;
+  const list=jars().slice().sort((a,b)=>jarTodo(b).amt-jarTodo(a).amt);
+  const tot=jars().reduce((s,j)=>s+jarBal(j),0);
+  const good=dark()?'#5DCAA5':'#0B6B4F', warn=dark()?'#EF9F27':'#8A5209';
+  let h=`<h1>Your accounts</h1>
+  <div class="mut" style="margin-top:-8px">${B(tot)} saved up across all ${jars().length}</div>
+  <div class="sp"></div>`;
+  list.forEach(j=>{
+    const bal=jarBal(j),td=jarTodo(j),owed=jarOwed(j);
+    h+=`<div class="card"><div class="row" style="align-items:center">
+      <button class="nm" data-jar="${j.id}" style="text-align:left">${esc(j.name)}</button>
+      <span class="mid">${B(bal)}</span></div>`;
+    if(td.amt>0){
+      h+=`<div style="font-size:13px;color:${warn};margin-top:8px">Move ${B(td.amt)} in — you spent it but haven't transferred yet</div>
+        <div class="sp"></div>
+        <button class="btn sm" style="background:#BA7517;color:#fff" data-movejar="${j.id}">Move ${B(td.amt)}</button>`;
+    }else if(owed>0){
+      h+=`<div style="font-size:13px;color:${bal>=owed?good:warn};margin-top:8px">${
+        bal>=owed?'✓ Enough for the '+B2(owed)+' bill':'Short '+B2(owed-bal)+' for the '+B2(owed)+' bill'}</div>`;
+    }else{
+      h+=`<div style="font-size:13px;color:${good};margin-top:8px">✓ Nothing due yet</div>`;
+    }
+    h+='</div>';
+  });
+  h+=`<div class="mut">Tap an account name to see what's in it.</div>`;
   return h+nav('jar');
+}
+function vJarOne(){
+  const j=jars().find(x=>x.id===V.jarId);
+  if(!j)return vJar();
+  const bal=jarBal(j),coming=jarComing(j),td=jarTodo(j),owed=jarOwed(j);
+  const names=(j.cards||[]).map(id=>card(id)).filter(Boolean);
+  const good=dark()?'#5DCAA5':'#0B6B4F', warn=dark()?'#EF9F27':'#8A5209';
+  let h=`<button class="back" data-go="jar">‹ Back</button>
+  <h1>${esc(j.name)}</h1>
+  <div class="mut" style="margin-top:-8px">for ${names.map(c=>`<span style="color:${c.c}">${esc(c.name)}</span>`).join(', ')||'no cards yet'}</div>
+  <div class="sp"></div>
+  <div class="center"><div class="big">${B(bal)}</div>
+    <div style="font-size:13px;color:${owed&&bal<owed?warn:good};margin-top:4px">${
+      owed>0?(bal>=owed?'✓ Enough for the '+B2(owed)+' bill':'Short '+B2(owed-bal)):'✓ Nothing due yet'}</div></div>
+  <div class="sp"></div>`;
+  if(td.amt>0)h+=`<button class="btn" style="background:#BA7517;color:#fff" data-movejar="${j.id}">Move ${B(td.amt)} in</button><div class="sp"></div>`;
+  h+=`<div class="card">
+    <div class="item"><div class="mut">Bills coming</div><div>${B2(coming)}</div></div>
+    <div class="item"><div class="mut">Spare after that</div><div>${B2(bal-coming)}</div></div></div>
+  <div class="card">
+    <div class="mut" style="margin-bottom:10px">Doesn't match your bank?</div>
+    <input id="realbal" inputmode="decimal" placeholder="${B2(bal)}">
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-setbal="${j.id}">Use this instead</button></div>`;
+  return h;
+}
+function vJars(){
+  let h=`<button class="back" data-go="settings">‹ Settings</button>
+  <h1>Your accounts</h1>
+  <div class="mut" style="margin-top:-8px">Put cards together if you pay them from the same account.</div>
+  <div class="sp"></div>`;
+  jars().forEach(j=>{
+    const names=(j.cards||[]).map(id=>card(id)).filter(Boolean);
+    h+=`<button class="card" style="display:block;width:100%;text-align:left" data-jaredit="${j.id}">
+      <div class="row"><span class="nm">${esc(j.name)}</span><span class="mut">›</span></div>
+      <div class="mut" style="margin-top:6px">${names.length?names.map(c=>`<span style="color:${c.c}">${esc(c.name)}</span>`).join(', '):'no cards'}</div>
+    </button>`;
+  });
+  return h+`<button class="btn ghost sm" data-act="addjar">＋ Add an account</button>`;
+}
+function vJarEdit(){
+  const j=jars().find(x=>x.id===V.jarId);
+  if(!j)return vJars();
+  const other=jars().find(x=>x.id!==j.id);
+  return `<button class="back" data-go="jars">‹ Back</button>
+  <h1>${esc(j.name)}</h1>
+  <div class="card">
+    <div class="mut" style="margin-bottom:8px">Name</div>
+    <input id="jname" value="${esc(j.name)}"></div>
+  <div class="card">
+    <div class="mut" style="margin-bottom:10px">Cards paid from this account</div>
+    ${S.cards.map(c=>{
+      const mine=(j.cards||[]).includes(c.id);
+      const o=jars().find(x=>x.id!==j.id&&(x.cards||[]).includes(c.id));
+      return `<button class="item" style="width:100%;text-align:left" data-togglecard="${c.id}">
+        <div><div class="nm" style="color:${c.c}">${esc(c.name)}</div>
+        ${o?`<div class="mut">now in ${esc(o.name)}</div>`:''}</div>
+        <div style="font-size:19px;color:${mine?c.c:'var(--tx3)'}">${mine?'✓':'＋'}</div></button>`}).join('')}
+  </div>
+  <button class="btn" data-act="savejar">Save</button>
+  ${other?`<div class="sp"></div><button class="btn ghost sm" data-act="deljar">Remove this account</button>
+  <div class="mut" style="margin-top:10px">Its cards and money move to ${esc(other.name)}.</div>`:''}`;
+}
+function vSplitJars(){
+  return `<h1>How much is in each?</h1>
+  <div class="mut" style="margin-top:-8px">Open your banking app and put in what each one really has.</div>
+  <div class="sp"></div>
+  ${jars().map(j=>`<div class="card">
+    <div class="mut" style="margin-bottom:9px">${esc(j.name)}</div>
+    <input data-jarbal="${j.id}" inputmode="decimal" placeholder="0" value="${jarBal(j)||''}"></div>`).join('')}
+  <button class="btn" data-act="savesplit">Done</button>
+  <div class="mut" style="margin-top:10px">You can change any of these later.</div>`;
 }
 
 /* ---------- bill check ---------- */
@@ -603,9 +813,10 @@ function vBill(){
     <div class="sp"></div><button class="btn" data-act="tryPw">Open it</button>
     <div class="sp"></div><button class="btn ghost sm" data-act="bcancel">Cancel</button>`;
   }
+  if(b.step==='cbedit')return vCashbackEdit();
   if(b.step==='review'){
     const q=b.queue[b.i];
-    if(!q)return vBillDone();
+    if(!q)return (b.cb&&!b.cbDone)?vCashback():vBillDone();
     const c=card(b.cardId);
     return `<div class="lbl">${esc(c.name)} bill · ${b.i+1} of ${b.queue.length}</div>
     <h1 style="margin-top:6px">This isn't in your notes</h1>
@@ -625,7 +836,35 @@ function vBill(){
     <div class="sp"></div>
     <button class="btn ghost sm" data-act="qskipall">Skip all ${b.queue.length-b.i}</button>`:''}`;
   }
-  return vBillDone();
+  return (b.cb&&!b.cbDone)?vCashback():vBillDone();
+}
+function vCashback(){
+  const b=V.b,c=card(b.cardId),cb=b.cb;
+  const yr=cb.year!=null?cb.year:cbYear(c.id)+cb.cycle;
+  const on=dark()?'#5DCAA5':'#085041';
+  return `<div class="lbl">${esc(c.name)} bill${b.closing?' · '+shortDate(b.closing):''}</div>
+  <h1 style="margin-top:6px">${cb.cycle>0?'You got '+B(cb.cycle)+' back':'No cash back this time'}</h1>
+  <div class="mut" style="margin-top:-8px">${cb.cycle>0?esc(c.name)+' gave you cash back this month.':'Nothing came back on this bill.'}</div>
+  <div class="sp"></div>
+  <div class="tile center" style="background:${dark()?'#1D9E7526':'#E1F5EE'};padding:24px">
+    <div class="big" style="color:${on};font-size:34px">${B2(cb.cycle)}</div>
+    ${yr?`<div style="font-size:13px;color:${on};opacity:.9;margin-top:6px">${B2(yr)} this year</div>`:''}
+  </div>
+  <div class="mut">The bank already took this off your bill, so there's nothing to move. It's just here so you can see what the card gives you back.</div>
+  <div class="sp"></div>
+  <button class="btn" data-act="cbok">Next</button>
+  <div class="sp"></div>
+  <button class="btn ghost" data-act="cbedit">That's not right</button>`;
+}
+function vCashbackEdit(){
+  const b=V.b,c=card(b.cardId);
+  return `<button class="back" data-act="cbback">‹ Back</button>
+  <h1>Cash back</h1>
+  <div class="mut" style="margin-top:-8px">What did ${esc(c.name)} actually give you back this month?</div>
+  <div class="sp"></div>
+  <input id="cbamt" inputmode="decimal" value="${b.cb.cycle||''}" placeholder="0.00">
+  <div class="sp"></div>
+  <button class="btn" data-act="cbsave">Save</button>`;
 }
 function vBillDone(){
   const b=V.b,c=card(b.cardId);
@@ -717,6 +956,72 @@ function vCardEdit(){
   <div class="mut" style="margin-top:10px">Hiding keeps everything in History — it just drops the card off your home screen and the Add screen.</div>`;
 }
 
+function agoText(iso){
+  if(!iso)return 'never';
+  const m=Math.round((Date.now()-new Date(iso).getTime())/60000);
+  if(m<1)return 'just now';
+  if(m<60)return m+' minute'+(m>1?'s':'')+' ago';
+  const h=Math.round(m/60);
+  if(h<24)return h+' hour'+(h>1?'s':'')+' ago';
+  return Math.round(h/24)+' day'+(h>24?'s':'')+' ago';
+}
+function vSync(){
+  const c=cfg(),on=ghOn();
+  const good=dark()?'#5DCAA5':'#0B6B4F', warn=dark()?'#EF9F27':'#8A5209';
+  let h=`<button class="back" data-go="settings">‹ Settings</button>
+  <h1>Same data everywhere</h1>
+  <div class="mut" style="margin-top:-8px">Keeps one copy online so your phone and your computer always show the same thing — and nothing is lost when you update the app.</div>
+  <div class="sp"></div>`;
+  if(on){
+    h+=`<div class="tile" style="background:${c.err?(dark()?'#BA751726':'#FAEEDA'):(dark()?'#1D9E7526':'#E1F5EE')}">
+      <div class="nm" style="color:${c.err?warn:good}">${c.err?(c.err==='key'?'The key isn\'t working':'Couldn\'t reach GitHub'):'✓ Turned on'}</div>
+      <div class="mut" style="color:${c.err?warn:good};opacity:.9;margin-top:4px">${
+        c.err==='key'?'Make a new key and paste it in again below.'
+        :c.err?'It\'ll try again on its own. Your data is safe on this device meanwhile.'
+        :'Saved '+agoText(c.last)+' · '+esc(c.repo)}</div>
+    </div>
+    <button class="btn" data-act="syncnow">Check for changes now</button>
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="syncoff">Turn it off on this device</button>
+    <div class="mut" style="margin-top:10px">Turning it off here leaves the online copy alone.</div>`;
+    return h;
+  }
+  h+=`<div class="card">
+    <div class="nm">First, on your computer</div>
+    <div class="mut" style="margin-top:8px;line-height:1.9">
+      1. Go to <b>github.com/new</b><br>
+      2. Name it <b>cards-data</b><br>
+      3. Tick <b>Private</b> — this matters, it keeps your spending to yourself<br>
+      4. Tick <b>Add a README file</b><br>
+      5. Click <b>Create repository</b>
+    </div>
+  </div>
+  <div class="card">
+    <div class="nm">Then get your key</div>
+    <div class="mut" style="margin-top:8px;line-height:1.9">
+      6. Go to <b>github.com/settings/personal-access-tokens</b><br>
+      7. Click <b>Generate new token</b><br>
+      8. Name it anything, set expiry to <b>No expiration</b><br>
+      9. Under <b>Repository access</b> pick <b>Only select repositories</b> → <b>cards-data</b><br>
+      10. Under <b>Permissions → Repository permissions</b>, set <b>Contents</b> to <b>Read and write</b><br>
+      11. Click <b>Generate token</b> and copy the long line it shows you
+    </div>
+  </div>
+  <div class="card">
+    <div class="nm">Now paste it here</div>
+    <div class="sp"></div>
+    <div class="mut" style="margin-bottom:6px">Your GitHub username</div>
+    <input id="ghuser" autocapitalize="off" autocorrect="off" placeholder="warutcha" value="${esc(c.user||'')}">
+    <div class="sp"></div>
+    <div class="mut" style="margin-bottom:6px">The key</div>
+    <input id="ghtoken" type="password" autocapitalize="off" autocorrect="off" placeholder="github_pat_...">
+    <div class="sp"></div>
+    <button class="btn" data-act="synccheck">Turn it on</button>
+  </div>
+  <div class="mut">Do this once on your computer and once on your phone, with the same key. The key only opens that one folder — it can\'t touch anything else, and nothing to do with your banks.</div>`;
+  return h;
+}
+
 /* ---------- history / settings ---------- */
 function vHistory(){
   const log=(S.log||[]).filter(x=>Date.now()-new Date(x.t).getTime()<7*864e5);
@@ -782,6 +1087,10 @@ function vSettings(){
   <button class="btn ghost sm" data-go="cards">Reorder or edit your cards</button>
   <div class="sp"></div>
   <button class="btn ghost sm" data-act="quicksettings">Quick names on the Add screen</button>
+  <div class="sp"></div>
+  <button class="btn ghost sm" data-go="jars">Your accounts</button>
+  <div class="sp"></div>
+  <button class="btn ghost sm" data-go="sync">Same data everywhere${ghOn()?(cfg().err?' · needs a look':' · on'):' · off'}</button>
   <div class="sp"></div><div class="sp"></div>
   <div class="card"><div class="nm">Bring in more notes</div>
     <div class="mut" style="margin:6px 0 10px">Safe to paste the same thing twice — it won't duplicate.</div>
@@ -1002,6 +1311,23 @@ function readCycleDates(text){
   return{closing:iso(closing),due:iso(due)};
 }
 
+function findCashback(text){
+  text=normDash(text);
+  let cycle=null,year=null;
+  const lines=[...text.matchAll(/CASH ?BACK REBATE[^\d\-]{0,20}-?\s*([\d,]+\.\d{2})/gi)].map(m=>num(m[1]));
+  if(lines.length)cycle=lines.reduce((a,b)=>a+b,0);
+  if(cycle==null){const m=text.match(/TMRW CASHBACK\s+([\d,]+\.\d{2})\s*CR/i);if(m)cycle=num(m[1]);}
+  if(cycle==null){
+    const m=text.match(/This Cycle Cash ?Back Received[^\d]{0,30}?([\d,]+\.\d{2})/i)
+          ||text.match(/เครดิตเงินคืนรอบนี้[^\d]{0,40}?([\d,]+\.\d{2})/);
+    if(m)cycle=num(m[1]);
+  }
+  const y=text.match(/This Year Cash ?Back Received[^\d]{0,30}?([\d,]+\.\d{2})/i)
+        ||text.match(/เครดิตเงินคืนรวมปีนี้[^\d]{0,40}?([\d,]+\.\d{2})/);
+  if(y)year=num(y[1]);
+  return (cycle==null&&year==null)?null:{cycle:cycle||0,year};
+}
+
 /* matching */
 function runMatch(cardId,parsed,closing){
   const c=card(cardId);
@@ -1120,7 +1446,7 @@ document.addEventListener('pointercancel',()=>{dragI=null;dragList=null;draw();}
 
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq]');
+  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard]');
   if(!t)return;
   const g=t.dataset;
   if(g.cyc)return go('cycle',{cycKey:g.cyc});
@@ -1138,7 +1464,7 @@ document.addEventListener('click',async e=>{
       sub:'It goes back to your home screen as a bill to pay.',
       tint:tint(c),on:ontint(c),color:c.c,
       hero:{top:c.name,amt:B2(cy.total),foot:'bill from '+shortDate(cy.closing)},
-      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+cy.total)]],
+      rows:[[jarOfCard(c.id).name,B2(jarBal(jarOfCard(c.id)))],['After this',B2(jarBal(jarOfCard(c.id))+cy.total)]],
       cta:'Yes, mark it unpaid',cancel:'Leave it as paid'});
   }
   if(g.delq!==undefined){
@@ -1149,6 +1475,38 @@ document.addEventListener('click',async e=>{
     S.quick=S.quick||[];
     if(!S.quick.some(n=>n.toLowerCase()===g.addq.toLowerCase()))S.quick.push(g.addq);
     await save();toast('Added “'+g.addq+'”');return draw();
+  }
+  if(g.jar)return go('jarone',{jarId:g.jar});
+  if(g.jaredit)return go('jaredit',{jarId:g.jaredit});
+  if(g.movejar){
+    const j=jars().find(x=>x.id===g.movejar),td=jarTodo(j);
+    if(!td.amt)return;
+    const bits=[];
+    if(td.txns.length)bits.push(td.txns.length+' purchase'+(td.txns.length>1?'s':''));
+    if(td.plans.length)bits.push(td.plans.length+' แบ่ง payment'+(td.plans.length>1?'s':''));
+    return ask({kind:'move',jar:j.id,title:'Moved the money?',
+      sub:'Tap yes once you\'ve made the transfer in your banking app.',
+      tint:dark()?'#BA751726':'#FAEEDA',on:dark()?'#EF9F27':'#633806',color:'#BA7517',
+      hero:{top:j.name,amt:B(td.amt),foot:bits.join(' · ')},
+      rows:[[j.name+' now',B2(jarBal(j))],['After this',B2(jarBal(j)+td.amt)]],
+      cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
+  }
+  if(g.setbal){
+    const j=jars().find(x=>x.id===g.setbal);
+    const raw=document.getElementById('realbal').value;
+    const v=Number((raw||'').replace(/,/g,''));
+    if(!raw||!isFinite(v))return toast('Type the real balance first');
+    const snap=snapshot();
+    j.open=(j.open||0)+(v-jarBal(j));
+    logAct({kind:'bal',label:j.name+' set to '+B2(v),snap});
+    await save();toast('Updated');return draw();
+  }
+  if(g.togglecard){
+    const j=jars().find(x=>x.id===V.jarId);
+    const had=(j.cards||[]).includes(g.togglecard);
+    jars().forEach(x=>x.cards=(x.cards||[]).filter(id=>id!==g.togglecard));
+    if(!had)(j.cards=j.cards||[]).push(g.togglecard);
+    await save();return draw();
   }
   if(g.edit)return go('cardedit',{cardId:g.edit});
   if(g.pickCol){
@@ -1185,12 +1543,12 @@ document.addEventListener('click',async e=>{
   }
   if(g.pay){
     const cy=S.cycles.find(c=>c.key===g.pay),c=card(cy.cardId);
-    const bal=jarBalance();
+    const jr=jarOfCard(c.id),bal=jarBal(jr);
     return ask({kind:'pay',key:g.pay,title:'Did you pay it?',
       sub:'Only tap yes once the money has actually left your bank.',
       tint:tint(c),on:ontint(c),color:c.c,
       hero:{top:c.name,amt:B2(cy.total),foot:'bill from '+shortDate(cy.closing)+' · due '+shortDate(cy.due)},
-      rows:[['Jar now',B2(bal)],['After this',B2(bal-cy.total)]],
+      rows:[[jr.name,B2(bal)],['After this',B2(bal-cy.total)]],
       cta:'Yes, I\'ve paid it',
       note:'You can undo this later from History.'});
   }
@@ -1210,66 +1568,38 @@ document.addEventListener('click',async e=>{
   }
   if(a==='dosplit')return commit(true);
   if(a==='nosplit')return commit(false);
-  if(a==='moveall'){
-    const nm=notMoved();const tot=nm.reduce((s,x)=>s+x.reserved,0);
-    if(!tot)return;
-    const ids=[...new Set(nm.map(t=>t.cardId))];
-    const c=ids.length===1?card(ids[0]):null;
-    return ask({kind:'moveall',title:'Moved the money?',
-      sub:'Tap yes once you\'ve made the transfer in your banking app.',
-      tint:c?tint(c):(dark()?'#BA751726':'#FAEEDA'),on:c?ontint(c):(dark()?'#EF9F27':'#633806'),
-      color:c?c.c:'#BA7517',
-      hero:{top:nm.length+' purchase'+(nm.length>1?'s':''),amt:B(tot),
-            foot:nm.slice(0,4).map(x=>x.note||'—').join(' · ')},
-      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+tot)]],
-      cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
-  }
-  if(a==='moveplans'){
-    const list=planTodo();
-    const tot=list.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
-    if(!tot)return;
-    const ids=[...new Set(list.map(p=>p.cardId))];
-    const c=ids.length===1?card(ids[0]):null;
-    return ask({kind:'moveplans',title:'Moved the money?',
-      sub:'Tap yes once you\'ve made the transfer in your banking app.',
-      tint:c?tint(c):(dark()?'#7F77DD26':'#EEEDFE'),on:c?ontint(c):(dark()?'#A9A2F5':'#3C3489'),
-      color:c?c.c:'#7F77DD',
-      hero:{top:list.length+' แบ่ง payment'+(list.length>1?'s':''),amt:B(tot),
-            foot:list.map(p=>p.title).slice(0,4).join(' · ')},
-      rows:[['Jar now',B2(jarBalance())],['After this',B2(jarBalance()+tot)]],
-      cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
-  }
   if(a==='confirmno'){V.confirm=null;return draw();}
   if(a==='confirmyes'){
     const q=V.confirm;V.confirm=null;
     const snap=snapshot();
     if(q.kind==='pay'){
       const cy=S.cycles.find(x=>x.key===q.key),c=card(cy.cardId);
-      const mv={id:uid(),d:today(),amt:cy.total,kind:'out',label:c.name};
+      const mv={id:uid(),jar:jarOfCard(c.id).id,d:today(),amt:cy.total,kind:'out',label:c.name};
       S.moves.push(mv);cy.status='paid';cy.paidOn=today();cy.payMove=mv.id;
       logAct({kind:'pay',cardId:c.id,label:'Paid '+c.name+' '+B2(cy.total),
         sub:'bill from '+shortDate(cy.closing),snap});
       await save();toast('Paid — filed away');return go('home');
     }
-    if(q.kind==='moveall'){
-      const nm=notMoved();const tot=nm.reduce((s,x)=>s+x.reserved,0);
-      const ids=[...new Set(nm.map(t=>t.cardId))];
-      nm.forEach(x=>x.moved=true);
-      S.moves.push({id:uid(),d:today(),amt:tot,kind:'in',label:nm.length+' purchases'});
-      logAct({kind:'move',cardId:ids.length===1?ids[0]:null,label:'Moved '+B(tot)+' to the jar',
-        sub:nm.length+' purchase'+(nm.length>1?'s':''),snap});
-      await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    if(q.kind==='move'){
+      const j=jars().find(x=>x.id===q.jar),td=jarTodo(j);
+      td.txns.forEach(x=>x.moved=true);
+      td.plans.forEach(pl=>{pl.lastMoved=cycKey(card(pl.cardId),today())});
+      S.moves.push({id:uid(),jar:j.id,d:today(),amt:td.amt,kind:'in',label:j.name});
+      const ids=[...new Set(td.txns.map(t=>t.cardId).concat(td.plans.map(pl=>pl.cardId)))];
+      const bits=[];
+      if(td.txns.length)bits.push(td.txns.length+' purchase'+(td.txns.length>1?'s':''));
+      if(td.plans.length)bits.push(td.plans.length+' แบ่ง');
+      logAct({kind:'move',cardId:ids.length===1?ids[0]:null,
+        label:'Moved '+B(td.amt)+' to '+j.name,sub:bits.join(' · '),snap});
+      await save();toast('Moved '+B(td.amt));return draw();
     }
-    if(q.kind==='moveplans'){
-      const list=planTodo();
-      const tot=list.reduce((s,p)=>s+up(p.monthly,autoStep(p.monthly)),0);
-      const ids=[...new Set(list.map(p=>p.cardId))];
-      list.forEach(p=>{p.lastMoved=cycKey(card(p.cardId),today())});
-      S.moves.push({id:uid(),d:today(),amt:tot,kind:'in',label:list.length+' แบ่ง payments'});
-      logAct({kind:'move',cardId:ids.length===1?ids[0]:null,label:'Moved '+B(tot)+' to the jar',
-        sub:list.length+' แบ่ง payment'+(list.length>1?'s':''),snap});
-      await save();toast('Moved '+B(tot)+' to the jar');return draw();
+    if(q.kind==='pull'){
+      const r=await ghGet();
+      S=r.data;await saveLocal();
+      setCfg({...cfg(),sha:r.sha,last:new Date().toISOString(),err:null});
+      toast('Brought your data down');return go('home');
     }
+    if(q.kind==='syncoff'){setCfg({});toast('Turned off here');return go('sync');}
     if(q.kind==='close')return doClose(snap);
     if(q.kind==='undo'){
       if(undoTo(q.logId)){await save();toast('Put back');return go('history');}
@@ -1278,20 +1608,13 @@ document.addEventListener('click',async e=>{
     if(q.kind==='unpay'){
       const cy=S.cycles.find(x=>x.key===q.key),c=card(cy.cardId);
       if(cy.payMove)S.moves=S.moves.filter(m=>m.id!==cy.payMove);
-      else S.moves.push({id:uid(),d:today(),amt:cy.total,kind:'in',label:'unpaid '+c.name});
+      else S.moves.push({id:uid(),jar:jarOfCard(c.id).id,d:today(),amt:cy.total,kind:'in',label:'unpaid '+c.name});
       cy.status='billed';delete cy.paidOn;delete cy.payMove;
       logAct({kind:'unpay',cardId:c.id,label:'Marked '+c.name+' as not paid',
-        sub:B2(cy.total)+' back in the jar',snap});
+        sub:B2(cy.total)+' back in '+jarOfCard(c.id).name,snap});
       await save();toast('Back on your home screen to pay');return go('home');
     }
     return draw();
-  }
-  if(a==='setbal'){
-    const v=Number((document.getElementById('realbal').value||'').replace(/,/g,''));
-    if(!isFinite(v))return;
-    const diff=v-jarBalance();
-    S.moves.push({d:today(),amt:Math.abs(diff),kind:diff>0?'in':'out',label:'adjustment'});
-    await save();toast('Jar updated');return draw();
   }
   if(a==='preview'||a==='importmore'){
     const txt=document.getElementById('notes').value;
@@ -1335,6 +1658,102 @@ document.addEventListener('click',async e=>{
     S.quick.push(n);await save();return draw();
   }
   if(a==='quicksettings')return go('quick',{from:'settings'});
+  if(a==='synccheck'){
+    const user=(document.getElementById('ghuser').value||'').trim().replace(/^@/,'');
+    const token=(document.getElementById('ghtoken').value||'').trim();
+    if(!user||!token)return toast('Fill both boxes first');
+    toast('Checking…');
+    setCfg({user,token,repo:user+'/cards-data',path:'data.json'});
+    try{
+      const r=await ghGet();
+      if(r.missing){
+        await pushUp();
+        if(cfg().err)throw new Error(cfg().err);
+        toast('All set — your data is saved online now');
+        return go('sync');
+      }
+      // there is already a copy up there
+      const theirs=r.data&&r.data.updated?new Date(r.data.updated).getTime():0;
+      const mine=S.updated?new Date(S.updated).getTime():0;
+      setCfg({...cfg(),sha:r.sha,last:new Date().toISOString(),err:null});
+      if(theirs>mine&&(r.data.txns||[]).length){
+        return ask({kind:'pull',title:'There\'s already a copy online',
+          sub:'It looks newer than what\'s on this device.',
+          rows:[['Online',(r.data.txns||[]).length+' purchases'],
+                ['This device',(S.txns||[]).length+' purchases']],
+          cta:'Use the online one',cancel:'Keep this device\'s',
+          note:'Whichever you pick becomes the one both devices use.'});
+      }
+      await pushUp();
+      toast('All set');return go('sync');
+    }catch(e){
+      const m=String(e.message);
+      setCfg({});
+      return toast(m==='key'?'That key didn\'t work — check you copied all of it'
+        :m.includes('404')?'Couldn\'t find the folder — is it named cards-data?'
+        :'Couldn\'t reach GitHub — check your connection');
+    }
+  }
+  if(a==='syncnow'){
+    toast('Checking…');
+    const r=await pullDown();
+    toast(r==='pulled'?'Brought down the newer copy':r==='error'?'Couldn\'t reach GitHub':'Up to date');
+    return draw();
+  }
+  if(a==='syncoff'){
+    return ask({kind:'syncoff',title:'Turn sync off here?',
+      sub:'This device stops sharing. The online copy and your other devices stay as they are.',
+      cta:'Turn it off',cancel:'Leave it on'});
+  }
+  if(a==='addjar'){
+    jars().push({id:'j'+uid(),name:'New account',cards:[],open:0});
+    await save();return draw();
+  }
+  if(a==='savejar'){
+    const j=jars().find(x=>x.id===V.jarId);
+    const n=document.getElementById('jname').value.trim();
+    if(n)j.name=n;
+    await save();toast('Saved');return go('jars');
+  }
+  if(a==='deljar'){
+    const j=jars().find(x=>x.id===V.jarId);
+    const other=jars().find(x=>x.id!==j.id);
+    if(!other)return;
+    other.cards=(other.cards||[]).concat(j.cards||[]);
+    other.open=(other.open||0)+jarBal(j);
+    S.moves.forEach(m=>{if(m.jar===j.id)m.jar=other.id});
+    S.jars=jars().filter(x=>x.id!==j.id);
+    await save();toast('Merged into '+other.name);return go('jars');
+  }
+  if(a==='savesplit'){
+    document.querySelectorAll('[data-jarbal]').forEach(el=>{
+      const j=jars().find(x=>x.id===el.dataset.jarbal);
+      const v=Number((el.value||'0').replace(/,/g,''));
+      if(j&&isFinite(v))j.open=(j.open||0)+(v-jarBal(j));
+    });
+    S.needSplit=false;await save();toast('All set');return go('jar');
+  }
+  if(a==='cbok'){
+    const b=V.b,c=card(b.cardId);
+    setCashback(c.id,b.closing||today(),b.cb.cycle,b.cb.year);
+    b.cbDone=true;await save();return draw();
+  }
+  if(a==='cbedit'){V.b.step='cbedit';return draw();}
+  if(a==='cbback'){V.b.step='review';return draw();}
+  if(a==='cbsave'){
+    const v=Number((document.getElementById('cbamt').value||'0').replace(/,/g,''));
+    if(!isFinite(v))return toast('Numbers only');
+    V.b.cb.cycle=v;V.b.cb.year=null;V.b.step='review';return draw();
+  }
+  if(a==='cbmanual'){
+    const c=card(V.cardId),el=document.getElementById('cbman');
+    const v=Number((el.value||'0').replace(/,/g,''));
+    if(!v)return toast('Type an amount first');
+    const cy=S.cycles.filter(x=>x.cardId===c.id&&x.status!=='open')
+      .sort((a2,b2)=>a2.closing<b2.closing?1:-1)[0];
+    setCashback(c.id,cy?cy.closing:iso(closingFor(c,today())),v,null);
+    await save();toast('Saved');return draw();
+  }
   if(a==='savecard'){
     const c=card(V.cardId);
     const nm2=document.getElementById('cname').value.trim();
@@ -1505,9 +1924,10 @@ async function startReview(text){
     if(c.cut!==nc||c.due!==nd){fixed=`ตัด ${nc}, due ${nd}`;c.cut=nc;c.due=nd;}
   }
   const r=runMatch(V.b.cardId,parsed,cd&&cd.closing);
+  const cb=findCashback(text);
   V.b={...V.b,step:'review',lines:parsed.lines,queue:r.queue,i:0,
        matched:r.matched,reservedSum:r.reservedSum,total:parsed.total||'',added:0,flagged:0,
-       closing:cd&&cd.closing,due:cd&&cd.due,fixed};
+       closing:cd&&cd.closing,due:cd&&cd.due,fixed,cb,cbDone:false};
   await save();draw();
   if(fixed)toast('Dates picked up: '+fixed);
 }
@@ -1544,12 +1964,21 @@ document.addEventListener('change',async e=>{
 (async()=>{
   if(window.pdfjsLib)pdfjsLib.GlobalWorkerOptions.workerSrc=
     'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  S=await load()||fresh();
+  S=await loadLocal()||fresh();
   if(!S.cards)S=fresh();
   if(!S.pw)S.pw={};
   if(S.pwDate===undefined)S.pwDate='';
   if(!S.log)S.log=[];
   if(!S.quick)S.quick=['7-Eleven','Shopee Food'];
+  if(!S.cashback)S.cashback=[];
+  if(!S.jars){
+    S.jars=defaultJars();
+    // the old single pot becomes the first account so nothing is lost
+    const carried=(S.jarOpen||0)+(S.moves||[]).reduce((a,m)=>a+(m.kind==='in'?m.amt:-m.amt),0);
+    S.jars[0].open=carried;S.jarOpen=0;
+    (S.moves||[]).forEach(m=>{if(!m.jar)m.jar=S.jars[0].id});
+    S.needSplit=carried!==0;
+  }
   const fixed=repairOpen();
   if(fixed)setTimeout(()=>toast('Cleaned up '+fixed+' mismatched purchase'+(fixed>1?'s':'')),600);
   if(!S.cards||!S.cards.length)S.cards=CARDS.map(c=>({...c}));
@@ -1557,6 +1986,23 @@ document.addEventListener('change',async e=>{
     CARDS.forEach(d=>{if(!S.cards.some(x=>x.id===d.id))S.cards.push({...d})});
     S.cards=S.cards.map(x=>{const d=CARDS.find(y=>y.id===x.id)||{};return{...d,...x}});
   }
+  if(S.setup&&S.needSplit)V={view:'splitjars'};
   draw();
+  // ask the phone not to bin our data when it tidies up
+  try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
+  // then catch up with the online copy
+  if(ghOn()){
+    const r=await pullDown();
+    if(r==='pulled'){toast('Brought down your latest');draw();}
+    else if(r==='error'&&cfg().err==='key')toast('Sync key needs renewing');
+  }
 })();
+/* coming back to the app after a while is a good moment to check */
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState!=='visible'||!ghOn())return;
+  const c=cfg();
+  if(c.last&&Date.now()-new Date(c.last).getTime()<60000)return;
+  const r=await pullDown();
+  if(r==='pulled'){toast('Brought down your latest');draw();}
+});
 </script>
