@@ -178,7 +178,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v11 · 4 Aug';
+const BUILD='v12 · 12 Aug';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -416,7 +416,8 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','
 function draw(){
   const v=V.view;
   let h='';
-  if(!S.setup&&v!=='setup')return go('setup');
+  // sync has to be reachable before setup, so a new device can pull instead of starting over
+  if(!S.setup&&v!=='setup'&&v!=='sync')return go('setup');
   if(V.confirm)h=vConfirm();
   else if(v==='setup')h=vSetup();
   else if(v==='home')h=vHome();
