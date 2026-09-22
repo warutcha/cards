@@ -47,7 +47,7 @@ input,textarea,select{font:inherit;width:100%;background:var(--card);color:var(-
   border:1px solid var(--line);border-radius:14px;padding:13px 14px;outline:none}
 input:focus,textarea:focus{border-color:var(--line2)}
 textarea{min-height:150px;font-size:14px;line-height:1.5}
-.nav{display:flex;gap:8px;margin:18px 0 4px;justify-content:center}
+.nav{display:flex;gap:8px;margin:18px 0 4px;justify-content:center;flex-wrap:wrap}
 .nav button{font-size:13px;color:var(--tx2);padding:9px 13px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
 .nav button.on{color:var(--tx);border-color:var(--line2);font-weight:600}
 .back{font-size:15px;color:var(--tx2);padding:6px 0;margin-bottom:6px;display:inline-block}
@@ -178,7 +178,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v13 · 12 Aug';
+const BUILD='v14 · 22 Sep';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -426,6 +426,7 @@ function draw(){
   else if(v==='split')h=vSplit();
   else if(v==='card')h=vCard();
   else if(v==='jar')h=vJar();
+  else if(v==='spend')h=vSpend();
   else if(v==='jarone')h=vJarOne();
   else if(v==='jars')h=vJars();
   else if(v==='sync')h=vSync();
@@ -463,7 +464,7 @@ function vConfirm(){
 }
 function ask(o){V.confirm=o;draw();window.scrollTo(0,0);}
 function nav(cur){
-  const items=[['home','Home'],['jar','Jar'],['bill','Check bill'],['history','History'],['settings','Settings']];
+  const items=[['home','Home'],['spend','Spending'],['jar','Jar'],['bill','Check bill'],['history','History'],['settings','Settings']];
   return '<div class="nav">'+items.map(([k,l])=>
     `<button class="${k===cur?'on':''}" data-go="${k}">${l}</button>`).join('')+'</div>';
 }
@@ -799,6 +800,178 @@ function vSplitJars(){
   <div class="mut" style="margin-top:10px">You can change any of these later.</div>`;
 }
 
+/* ---------------- spending ----------------
+   Aggregated straight from S.txns — each logged purchase, on its own date,
+   using the statement amount once known, otherwise the reserved estimate. */
+function cardOrGhost(id){
+  return card(id)||{id,name:'Deleted card',c:'#8A8580'};
+}
+function txnAmt(t){return t.actual!=null?t.actual:t.reserved}
+const addDays=(d,n)=>{const x=parse(d);x.setDate(x.getDate()+n);return iso(x)};
+const addMonths=(d,n)=>{const x=parse(d);x.setMonth(x.getMonth()+n);return iso(x)};
+function mondayOf(d){
+  const x=parse(d);const wd=(x.getDay()+6)%7;  // 0=Mon
+  x.setDate(x.getDate()-wd);return iso(x);
+}
+function monthKeyOf(d){return d.slice(0,7)}
+function monthLabel(key){const[y,m]=key.split('-').map(Number);return MON[m-1]+' '+y}
+function txnsBetween(fromD,toD){  // inclusive
+  return S.txns.filter(t=>t.date>=fromD&&t.date<=toD);
+}
+function periodStats(rows){
+  const confirmed=rows.filter(t=>t.actual!=null).reduce((s,t)=>s+t.actual,0);
+  const estimated=rows.filter(t=>t.actual==null).reduce((s,t)=>s+t.reserved,0);
+  return{confirmed,estimated,total:confirmed+estimated};
+}
+function byCardStats(rows){
+  const m={};
+  rows.forEach(t=>{m[t.cardId]=(m[t.cardId]||0)+txnAmt(t)});
+  const total=Object.values(m).reduce((a,b)=>a+b,0)||1;
+  return Object.entries(m).sort((a,b)=>b[1]-a[1]).map(([id,v])=>({id,v,pct:Math.round(v/total*100)}));
+}
+function topMerchants(rows,n){
+  const m={};
+  rows.forEach(t=>{const k=t.note||'—';if(!m[k])m[k]={amt:0,n:0};m[k].amt+=txnAmt(t);m[k].n++;});
+  return Object.entries(m).sort((a,b)=>b[1].amt-a[1].amt).slice(0,n||5);
+}
+function barChart(buckets,labels,colorFor){
+  // buckets: array of {rows} in display order; returns an SVG string, stacked by card
+  const totals=buckets.map(b=>periodStats(b.rows).total);
+  const max=Math.max(...totals,1);
+  const n=buckets.length;
+  const gap=6,w=(340-10)/n-gap;
+  let bars='';
+  buckets.forEach((b,i)=>{
+    const x=10+i*(w+gap);
+    const stack=byCardStats(b.rows);
+    let y=120;
+    if(!stack.length){bars+='';return;}
+    stack.forEach(s=>{
+      const hgt=(s.v/max)*95;
+      y-=hgt;
+      bars+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${hgt.toFixed(1)}" rx="2" fill="${colorFor?colorFor(s.id,i):cardOrGhost(s.id).c}" ${b.tap?`data-spendbar="${b.tap}"`:''}/>`;
+    });
+  });
+  const labelRow=labels.map((l,i)=>`<text x="${(10+i*(w+gap)).toFixed(1)}" y="135" font-size="9" fill="var(--tx3)">${esc(l)}</text>`).join('');
+  return `<svg class="bar-wrap" viewBox="0 0 340 140" style="width:100%">${bars}${labelRow}</svg>`;
+}
+function cardListBlock(rows,title){
+  const stack=byCardStats(rows);
+  if(!stack.length)return `<div class="card"><div class="mut">Nothing logged in this period.</div></div>`;
+  return `<div class="card">
+    <div class="mut" style="margin-bottom:8px">${esc(title||'By card')}</div>
+    ${stack.map((s,i)=>`<div class="item" style="${i?'':'border-top:0'}">
+      <span class="legend"><span class="dot" style="background:${cardOrGhost(s.id).c}"></span>${esc(cardOrGhost(s.id).name)}</span>
+      <span style="font-size:14px">${B(s.v)} · ${s.pct}%</span></div>`).join('')}
+  </div>`;
+}
+function spendTabs(cur){
+  return `<div class="tabs">
+    <button class="tab ${cur==='week'?'on':''}" data-spendtab="week">Week</button>
+    <button class="tab ${cur==='month'?'on':''}" data-spendtab="month">Month</button>
+    <button class="tab ${cur==='all'?'on':''}" data-spendtab="all">All time</button>
+  </div>`;
+}
+function vSpend(){
+  V.spend=V.spend||{};
+  const sp=V.spend;
+  if(sp.drillMonth)return vSpendMonthDrill(sp.drillMonth);
+  const tab=sp.tab||'week';
+  let h=`<h1>Spending</h1>`;
+  h+=spendTabs(tab);
+  if(tab==='week')h+=vSpendWeek();
+  else if(tab==='month')h+=vSpendMonth();
+  else h+=vSpendAll();
+  return h+nav('spend');
+}
+function vSpendWeek(){
+  const sp=V.spend;
+  const start=sp.weekStart||mondayOf(today());
+  sp.weekStart=start;
+  const end=addDays(start,6);
+  const atNow=start===mondayOf(today());
+  const days=[...Array(7)].map((_,i)=>addDays(start,i));
+  const dayLabels=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+  const buckets=days.map(d=>({rows:txnsBetween(d,d)}));
+  const rows=txnsBetween(start,end);
+  const st=periodStats(rows);
+  return `<div class="row" style="align-items:center;margin-bottom:6px">
+    <button data-spendnav="prevweek" style="font-size:20px;padding:4px 10px">‹</button>
+    <div class="lbl">${shortDate(start)} – ${shortDate(end)}</div>
+    <button data-spendnav="nextweek" style="font-size:20px;padding:4px 10px;${atNow?'opacity:.25;pointer-events:none;':''}">›</button>
+  </div>
+  <div class="big" style="margin:2px 0 2px">${B(st.total)}</div>
+  <div class="mut" style="margin-bottom:10px">${B(st.confirmed)} confirmed by statements · ${B(st.estimated)} estimated</div>
+  ${barChart(buckets,dayLabels)}
+  ${cardListBlock(rows)}`;
+}
+function vSpendMonth(){
+  const sp=V.spend;
+  const key=sp.monthKey||monthKeyOf(today());
+  sp.monthKey=key;
+  const atNow=key===monthKeyOf(today());
+  const[y,m]=key.split('-').map(Number);
+  const first=key+'-01';
+  const last=iso(new Date(y,m,0));
+  const rows=txnsBetween(first,last);
+  const st=periodStats(rows);
+  // up to 5 week-rows within the month, chunked by calendar day
+  const weekBuckets=[];
+  for(let d=1;d<=Number(last.slice(8));d+=7){
+    const from=key+'-'+D(d);
+    const to=key+'-'+D(Math.min(d+6,Number(last.slice(8))));
+    weekBuckets.push({rows:txnsBetween(from,to)});
+  }
+  const wLabels=weekBuckets.map((_,i)=>'W'+(i+1));
+  return `<div class="row" style="align-items:center;margin-bottom:6px">
+    <button data-spendnav="prevmonth" style="font-size:20px;padding:4px 10px">‹</button>
+    <div class="lbl">${monthLabel(key)}</div>
+    <button data-spendnav="nextmonth" style="font-size:20px;padding:4px 10px;${atNow?'opacity:.25;pointer-events:none;':''}">›</button>
+  </div>
+  <div class="big" style="margin:2px 0 2px">${B(st.total)}</div>
+  <div class="mut" style="margin-bottom:10px">${B(st.confirmed)} confirmed by statements · ${B(st.estimated)} estimated</div>
+  ${barChart(weekBuckets,wLabels)}
+  ${cardListBlock(rows)}`;
+}
+function vSpendAll(){
+  if(!S.txns.length)return `<div class="card"><div class="mut">Nothing logged yet.</div></div>`;
+  const first=S.txns.reduce((a,t)=>t.date<a?t.date:a,S.txns[0].date);
+  let key=monthKeyOf(first);
+  const keys=[];
+  const stop=monthKeyOf(today());
+  while(key<=stop){keys.push(key);key=monthKeyOf(addMonths(key+'-01',1));}
+  const buckets=keys.map(k=>({rows:txnsBetween(k+'-01',iso(new Date(+k.slice(0,4),+k.slice(5,7),0))),tap:k}));
+  const labels=keys.map(k=>MON[+k.slice(5,7)-1]);
+  const total=buckets.reduce((s,b)=>s+periodStats(b.rows).total,0);
+  const avg=total/keys.length;
+  return `<div class="lbl">${monthLabel(keys[0])} – ${monthLabel(keys[keys.length-1])}</div>
+  <div class="big" style="margin:2px 0 2px">${B(total)}</div>
+  <div class="mut" style="margin-bottom:10px">avg ${B(avg)} / month</div>
+  ${barChart(buckets,labels,(id,i)=>i===buckets.length-1?cardOrGhost(id).c:cardOrGhost(id).c)}
+  <div class="mut" style="margin:8px 0 12px">tap a month to open it</div>
+  ${cardListBlock(S.txns,'By card, all time')}`;
+}
+function vSpendMonthDrill(key){
+  const[y,m]=key.split('-').map(Number);
+  const first=key+'-01';
+  const last=iso(new Date(y,m,0));
+  const rows=txnsBetween(first,last);
+  const st=periodStats(rows);
+  const top=topMerchants(rows,5);
+  return `<button class="back" data-spendnav="closedrill">‹ All time</button>
+  <h1>${monthLabel(key)}</h1>
+  <div class="big" style="margin-bottom:2px">${B(st.total)}</div>
+  <div class="mut" style="margin-bottom:12px">${B(st.confirmed)} confirmed · ${B(st.estimated)} estimated</div>
+  ${top.length?`<div class="card">
+    <div class="mut" style="margin-bottom:8px">Top merchants</div>
+    ${top.map(([n,v],i)=>`<div class="item" style="${i?'':'border-top:0'}">
+      <span style="font-size:14px">${esc(n)}</span>
+      <span style="font-size:14px">${B(v.amt)}${v.n>1?' · '+v.n+' buys':''}</span></div>`).join('')}
+  </div>`:''}
+  ${cardListBlock(rows)}`;
+}
+
+/* ---------- bill check ---------- */
 /* ---------- bill check ---------- */
 function vBill(){
   const b=V.b||{step:'pick'};
@@ -1472,10 +1645,26 @@ document.addEventListener('pointercancel',()=>{dragI=null;dragList=null;draw();}
 
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard]');
+  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard],[data-spendtab],[data-spendnav],[data-spendbar]');
   if(!t)return;
   const g=t.dataset;
   if(g.cyc)return go('cycle',{cycKey:g.cyc});
+  if(g.spendtab){
+    V.spend=V.spend||{};V.spend.tab=g.spendtab;V.spend.drillMonth=null;return draw();
+  }
+  if(g.spendbar){
+    V.spend=V.spend||{};V.spend.drillMonth=g.spendbar;return draw();
+  }
+  if(g.spendnav){
+    V.spend=V.spend||{};
+    if(g.spendnav==='prevweek')V.spend.weekStart=addDays(V.spend.weekStart||mondayOf(today()),-7);
+    if(g.spendnav==='nextweek')V.spend.weekStart=addDays(V.spend.weekStart||mondayOf(today()),7);
+    if(g.spendnav==='prevmonth')V.spend.monthKey=monthKeyOf(addMonths((V.spend.monthKey||monthKeyOf(today()))+'-01',-1));
+    if(g.spendnav==='nextmonth')V.spend.monthKey=monthKeyOf(addMonths((V.spend.monthKey||monthKeyOf(today()))+'-01',1));
+    if(g.spendnav==='closedrill')V.spend.drillMonth=null;
+    return draw();
+  }
+
   if(g.undo){
     const x=(S.log||[]).find(y=>y.id===g.undo);
     if(!x)return;
