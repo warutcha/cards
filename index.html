@@ -62,6 +62,16 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:10px}
 .bar{display:flex;height:12px;border-radius:8px;overflow:hidden;gap:2px;margin:10px 0}
 .hide{display:none}
+.byrow{cursor:pointer;border-radius:10px;margin:0 -6px;padding:11px 6px;width:calc(100% + 12px);display:block;text-align:left}
+.byrow:active{background:var(--line)}
+.sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);opacity:0;pointer-events:none;transition:opacity .18s;z-index:40}
+.sheet-bg.on{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;max-width:520px;margin:0 auto;
+  background:var(--bg);border-radius:20px 20px 0 0;border:1px solid var(--line);border-bottom:0;
+  padding:14px 16px calc(20px + env(safe-area-inset-bottom));
+  transform:translateY(100%);transition:transform .2s ease;max-height:78vh;overflow-y:auto;z-index:41}
+.sheet.on{transform:translateY(0)}
+.grabber{width:36px;height:4px;background:var(--line2);border-radius:3px;margin:0 auto 14px}
 .strip{border-radius:14px;padding:14px 15px;display:flex;justify-content:space-between;
   align-items:center;font-size:14px;font-weight:600;margin-bottom:9px}
 .strip:active{opacity:.7}
@@ -80,6 +90,8 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .sp{height:6px}
 </style>
 <div id="app"></div>
+<div class="sheet-bg" id="sheetBg" data-sheetclose></div>
+<div class="sheet" id="sheet"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 /* ---------------- storage ----------------
@@ -184,7 +196,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v15 · 22 Sep';
+const BUILD='v16 · 22 Sep';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -861,16 +873,56 @@ function barChart(buckets,labels,colorFor){
   const labelRow=labels.map((l,i)=>`<text x="${(10+i*(w+gap)).toFixed(1)}" y="135" font-size="9" fill="var(--tx3)">${esc(l)}</text>`).join('');
   return `<svg class="bar-wrap" viewBox="0 0 340 140" style="width:100%">${bars}${labelRow}</svg>`;
 }
-function cardListBlock(rows,title){
+function cardListBlock(rows,title,scope){
   const stack=byCardStats(rows);
   if(!stack.length)return `<div class="card"><div class="mut">Nothing logged in this period.</div></div>`;
   return `<div class="card">
     <div class="mut" style="margin-bottom:8px">${esc(title||'By card')}</div>
-    ${stack.map((s,i)=>`<div class="item" style="${i?'':'border-top:0'}">
+    ${stack.map((s,i)=>`<button class="byrow" data-cardrow="${s.id}" data-scope="${esc(scope||'all')}" style="${i?'border-top:1px solid var(--line);':''}">
+      <div class="row">
       <span class="legend"><span class="dot" style="background:${cardOrGhost(s.id).c}"></span>${esc(cardOrGhost(s.id).name)}</span>
-      <span style="font-size:14px">${B(s.v)} · ${s.pct}%</span></div>`).join('')}
+      <span style="font-size:14px">${B(s.v)} · ${s.pct}%</span></div></button>`).join('')}
   </div>`;
 }
+function txnRow(t){
+  const c=cardOrGhost(t.cardId);
+  return `<div class="item">
+    <div><div style="font-size:14px">${esc(t.note||'—')}</div>
+      <div class="mut">${esc(c.name)} · ${shortDate(t.date)}${t.actual==null?' · estimated':''}</div></div>
+    <div style="font-size:14px;font-weight:600">${B(txnAmt(t))}</div>
+  </div>`;
+}
+function openSheet(html){
+  document.getElementById('sheet').innerHTML=
+    '<div class="grabber"></div><button data-sheetclose class="mut" style="float:right;margin:-4px -2px 8px 0;text-decoration:underline">Close</button><div style="clear:both"></div>'+html;
+  document.getElementById('sheet').classList.add('on');
+  document.getElementById('sheetBg').classList.add('on');
+}
+function closeSheet(){
+  document.getElementById('sheet').classList.remove('on');
+  document.getElementById('sheetBg').classList.remove('on');
+}
+function sheetGrouped(rows,title,sub){
+  const grouped=byCardStats(rows).map(s=>({...s,rows:rows.filter(t=>t.cardId===s.id)}));
+  return `<div class="row" style="margin-bottom:2px">
+    <h1 style="font-size:20px">${esc(title)}</h1>
+    <div style="font-size:20px;font-weight:650">${B(periodStats(rows).total)}</div></div>
+  <div class="mut" style="margin-bottom:12px">${esc(sub||'')}${sub?' · ':''}${rows.length} purchase${rows.length===1?'':'s'}</div>
+  ${grouped.map(g=>`<div class="mut" style="margin:14px 0 6px">
+      <span class="legend"><span class="dot" style="background:${cardOrGhost(g.id).c}"></span>${esc(cardOrGhost(g.id).name)} · ${B(g.v)}</span></div>
+    <div class="card" style="margin-top:0">${g.rows.slice().sort((a,b)=>txnAmt(b)-txnAmt(a)).map(txnRow).join('')}</div>`).join('')}`;
+}
+function sheetOneCard(rows,cardId,title,sub){
+  const c=cardOrGhost(cardId);
+  const list=rows.filter(t=>t.cardId===cardId).sort((a,b)=>a.date<b.date?1:-1);
+  return `<div class="row" style="margin-bottom:2px">
+    <h1 style="font-size:20px;color:${c.c}">${esc(title||c.name)}</h1>
+    <div style="font-size:20px;font-weight:650">${B(totalOf2(list))}</div></div>
+  <div class="mut" style="margin-bottom:12px">${esc(sub||'')}${sub?' · ':''}${list.length} purchase${list.length===1?'':'s'}</div>
+  <div class="card">${list.map(txnRow).join('')}</div>`;
+}
+function totalOf2(rows){return rows.reduce((s,t)=>s+txnAmt(t),0)}
+
 function spendTabs(cur){
   return `<div class="tabs">
     <button class="tab ${cur==='week'?'on':''}" data-spendtab="week">Week</button>
@@ -890,6 +942,26 @@ function vSpend(){
   else h+=vSpendAll();
   return h+nav('spend');
 }
+function tappableBars(buckets,labels){
+  // buckets: [{rows, key}] — key identifies the bucket for the click handler
+  const totals=buckets.map(b=>periodStats(b.rows).total);
+  const max=Math.max(...totals,1);
+  const n=buckets.length,gap=6,w=(340-10)/n-gap;
+  let bars='';
+  buckets.forEach((b,i)=>{
+    const x=10+i*(w+gap);
+    bars+=`<rect x="${x.toFixed(1)}" y="10" width="${w.toFixed(1)}" height="100" fill="transparent" data-bucket="${esc(b.key)}"/>`;
+    let y=110;
+    byCardStats(b.rows).forEach(s=>{
+      const hgt=(s.v/max)*90;
+      y-=hgt;
+      bars+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${hgt.toFixed(1)}" rx="2"
+        fill="${cardOrGhost(s.id).c}" data-seg="${esc(b.key)}:${s.id}"/>`;
+    });
+  });
+  const labelRow=labels.map((l,i)=>`<text x="${(10+i*(w+gap)).toFixed(1)}" y="125" font-size="9" fill="var(--tx3)">${esc(l)}</text>`).join('');
+  return `<svg class="bar-wrap" viewBox="0 0 340 130" style="width:100%">${bars}${labelRow}</svg>`;
+}
 function vSpendWeek(){
   const sp=V.spend;
   const start=sp.weekStart||mondayOf(today());
@@ -898,7 +970,7 @@ function vSpendWeek(){
   const atNow=start===mondayOf(today());
   const days=[...Array(7)].map((_,i)=>addDays(start,i));
   const dayLabels=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
-  const buckets=days.map(d=>({rows:txnsBetween(d,d)}));
+  const buckets=days.map(d=>({rows:txnsBetween(d,d),key:d}));
   const rows=txnsBetween(start,end);
   const st=periodStats(rows);
   return `<div class="row" style="align-items:center;margin-bottom:6px">
@@ -908,8 +980,9 @@ function vSpendWeek(){
   </div>
   <div class="big" style="margin:2px 0 2px">${B(st.total)}</div>
   <div class="mut" style="margin-bottom:10px">${B(st.confirmed)} confirmed by statements · ${B(st.estimated)} estimated</div>
-  ${barChart(buckets,dayLabels)}
-  ${cardListBlock(rows)}`;
+  <div class="mut" style="margin-bottom:6px">tap a bar or a card row for the purchases behind it</div>
+  ${tappableBars(buckets,dayLabels)}
+  ${cardListBlock(rows,'By card',start+'|'+end)}`;
 }
 function vSpendMonth(){
   const sp=V.spend;
@@ -926,7 +999,7 @@ function vSpendMonth(){
   for(let d=1;d<=Number(last.slice(8));d+=7){
     const from=key+'-'+D(d);
     const to=key+'-'+D(Math.min(d+6,Number(last.slice(8))));
-    weekBuckets.push({rows:txnsBetween(from,to)});
+    weekBuckets.push({rows:txnsBetween(from,to),key:from+'|'+to});
   }
   const wLabels=weekBuckets.map((_,i)=>'W'+(i+1));
   return `<div class="row" style="align-items:center;margin-bottom:6px">
@@ -936,8 +1009,9 @@ function vSpendMonth(){
   </div>
   <div class="big" style="margin:2px 0 2px">${B(st.total)}</div>
   <div class="mut" style="margin-bottom:10px">${B(st.confirmed)} confirmed by statements · ${B(st.estimated)} estimated</div>
-  ${barChart(weekBuckets,wLabels)}
-  ${cardListBlock(rows)}`;
+  <div class="mut" style="margin-bottom:6px">tap a bar or a card row for the purchases behind it</div>
+  ${tappableBars(weekBuckets,wLabels)}
+  ${cardListBlock(rows,'By card',first+'|'+last)}`;
 }
 function vSpendAll(){
   if(!S.txns.length)return `<div class="card"><div class="mut">Nothing logged yet.</div></div>`;
@@ -955,7 +1029,7 @@ function vSpendAll(){
   <div class="mut" style="margin-bottom:10px">avg ${B(avg)} / month</div>
   ${barChart(buckets,labels,(id,i)=>i===buckets.length-1?cardOrGhost(id).c:cardOrGhost(id).c)}
   <div class="mut" style="margin:8px 0 12px">tap a month to open it</div>
-  ${cardListBlock(S.txns,'By card, all time')}`;
+  ${cardListBlock(S.txns,'By card, all time','all')}`;
 }
 function vSpendMonthDrill(key){
   const[y,m]=key.split('-').map(Number);
@@ -974,7 +1048,7 @@ function vSpendMonthDrill(key){
       <span style="font-size:14px">${esc(n)}</span>
       <span style="font-size:14px">${B(v.amt)}${v.n>1?' · '+v.n+' buys':''}</span></div>`).join('')}
   </div>`:''}
-  ${cardListBlock(rows)}`;
+  ${cardListBlock(rows,'By card',first+'|'+last)}`;
 }
 
 /* ---------- bill check ---------- */
@@ -1651,10 +1725,29 @@ document.addEventListener('pointercancel',()=>{dragI=null;dragList=null;draw();}
 
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
-  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard],[data-spendtab],[data-spendnav],[data-spendbar]');
+  const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard],[data-spendtab],[data-spendnav],[data-spendbar],[data-seg],[data-bucket],[data-cardrow],[data-sheetclose]');
   if(!t)return;
   const g=t.dataset;
   if(g.cyc)return go('cycle',{cycKey:g.cyc});
+  if(g.seg){
+    const[key,cardId]=g.seg.split(/:(?!.*:)/);   // split on the last colon; keys never contain one
+    const[from,to]=key.includes('|')?key.split('|'):[key,key];
+    const rows=txnsBetween(from,to);
+    return openSheet(sheetOneCard(rows,cardId,null,to===from?shortDate(from):shortDate(from)+' – '+shortDate(to)));
+  }
+  if(g.bucket){
+    const key=g.bucket;
+    const[from,to]=key.includes('|')?key.split('|'):[key,key];
+    const rows=txnsBetween(from,to);
+    return openSheet(sheetGrouped(rows,to===from?shortDate(from):'W · '+shortDate(from)+' – '+shortDate(to)));
+  }
+  if(g.cardrow){
+    const scope=g.scope;
+    const rows=scope==='all'?S.txns:(()=>{const[from,to]=scope.split('|');return txnsBetween(from,to);})();
+    const label=scope==='all'?'all time':(()=>{const[from,to]=scope.split('|');return from===to?shortDate(from):shortDate(from)+' – '+shortDate(to);})();
+    return openSheet(sheetOneCard(rows,g.cardrow,null,label));
+  }
+  if(g.sheetclose!==undefined)return closeSheet();
   if(g.spendtab){
     V.spend=V.spend||{};V.spend.tab=g.spendtab;V.spend.drillMonth=null;return draw();
   }
