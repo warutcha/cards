@@ -178,7 +178,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v12 · 12 Aug';
+const BUILD='v13 · 12 Aug';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -257,12 +257,13 @@ function modeLabel(amt,mode){
   return 'nearest '+(m||autoStep(amt)).toLocaleString();
 }
 const uid=()=>Math.random().toString(36).slice(2,10);
+function hslToHex(h,sPct,lPct){const s=sPct/100,l=lPct/100;const k=n=>(n+h/30)%12;const a=s*Math.min(l,1-l);const f=n=>l-a*Math.max(-1,Math.min(k(n)-3,Math.min(9-k(n),1)));return toHex([f(0)*255,f(8)*255,f(4)*255].map(Math.round));}
 
 /* ---------------- state ---------------- */
 let S=null,V={view:'home'},toastT=null;
 function fresh(){
   return{v:1,setup:false,jarOpen:0,pwDate:'',pw:{},log:[],quick:['7-Eleven','Shopee Food'],
-         jars:defaultJars(),cashback:[],
+         jars:defaultJars(),cashback:[],deletedCards:[],
          cards:CARDS.map(c=>({...c})),txns:[],plans:[],cycles:[],moves:[]};
 }
 
@@ -932,11 +933,16 @@ function vCards(){
       <span class="mut" data-edit="${c.id}">›</span></div>`;
   });
   h+=`</div>
+  <button class="btn ghost sm" data-act="addcard">＋ Add a card</button>
   <div class="mut">This order is used on your home screen and on the Add a purchase screen.</div>`;
   return h;
 }
+function cardInUse(id){
+  return S.txns.some(t=>t.cardId===id)||S.cycles.some(c=>c.cardId===id)||S.plans.some(p=>p.cardId===id);
+}
 function vCardEdit(){
   const c=card(V.cardId);
+  const isNew=!CARDS.some(d=>d.id===c.id);
   const others=[...new Set(S.cards.filter(x=>x.id!==c.id).map(x=>x.c))];
   return `<button class="back" data-go="cards">‹ Your cards</button>
   <h1 style="color:${c.c}">${esc(c.name)}</h1>
@@ -958,15 +964,22 @@ function vCardEdit(){
     </div>
   </div>
   <div class="card">
-    <div class="item"><div>ตัด</div><div>${c.cut}</div></div>
-    <div class="item"><div>Due</div><div>${c.due}</div></div>
-    <div class="item"><div>แบ่ง</div><div>${c.split?c.split+'× above ฿1,000':'not available'}</div></div>
-    <div class="mut" style="margin-top:10px">These come from your statements and correct themselves each time you upload one.</div>
+    <div class="row"><div class="mut">ตัด (closing day)</div>
+      <input id="ccut" value="${c.cut}" inputmode="numeric" style="width:64px;padding:8px;text-align:center"></div>
+    <div class="dv"></div>
+    <div class="row"><div class="mut">Due day</div>
+      <input id="cdue" value="${c.due}" inputmode="numeric" style="width:64px;padding:8px;text-align:center"></div>
+    <div class="dv"></div>
+    <div class="row"><div class="mut">แบ่ง multiplier (0 = none)</div>
+      <input id="csplit" value="${c.split||0}" inputmode="numeric" style="width:64px;padding:8px;text-align:center"></div>
+    <div class="mut" style="margin-top:10px">${isNew?'Set these once — uploading a statement for this card will correct them from then on.':'These correct themselves each time you upload a statement for this card.'}</div>
   </div>
   <button class="btn" data-act="savecard">Save</button>
   <div class="sp"></div>
   <button class="btn ghost sm" data-act="togglehide">${c.hidden?'Show this card again':'Hide this card'}</button>
-  <div class="mut" style="margin-top:10px">Hiding keeps everything in History — it just drops the card off your home screen and the Add screen.</div>`;
+  <div class="mut" style="margin:10px 0 18px">Hiding keeps everything in History — it just drops the card off your home screen and the Add screen.</div>
+  <button class="btn ghost sm" data-act="deletecard">Delete this card</button>
+  <div class="mut" style="margin-top:10px">${cardInUse(c.id)?'This card has purchases or history, so it can\'t be deleted — hide it instead.':'Only available since this card has no purchases or history yet.'}</div>`;
 }
 
 function agoText(iso){
@@ -1613,6 +1626,14 @@ document.addEventListener('click',async e=>{
       toast('Brought your data down');return go('home');
     }
     if(q.kind==='syncoff'){setCfg({});toast('Turned off here');return go('sync');}
+    if(q.kind==='deletecard'){
+      const id=q.cardId;
+      S.cards=S.cards.filter(x=>x.id!==id);
+      jars().forEach(j=>{j.cards=(j.cards||[]).filter(cid=>cid!==id)});
+      if(CARDS.some(d=>d.id===id))S.deletedCards.push(id);
+      logAct({kind:'deletecard',label:'Deleted a card',sub:'',snap});
+      await save();toast('Deleted');return go('cards');
+    }
     if(q.kind==='close')return doClose(snap);
     if(q.kind==='undo'){
       if(undoTo(q.logId)){await save();toast('Put back');return go('history');}
@@ -1774,13 +1795,34 @@ document.addEventListener('click',async e=>{
     setCashback(c.id,cy?cy.closing:iso(closingFor(c,today())),v,null);
     await save();toast('Saved');return draw();
   }
+  if(a==='addcard'){
+    const id='c'+uid();
+    const hue=Math.floor(Math.random()*360);
+    S.cards.push({id,name:'New card',cut:1,due:1,split:0,
+      c:hslToHex(hue,55,45),hidden:false});
+    await save();return go('cardedit',{cardId:id});
+  }
   if(a==='savecard'){
     const c=card(V.cardId);
     const nm2=document.getElementById('cname').value.trim();
     const col=document.getElementById('ccol').value;
-    if(nm2)c.name=nm2;
+    const cut=+document.getElementById('ccut').value;
+    const due=+document.getElementById('cdue').value;
+    const split=+document.getElementById('csplit').value;
+    if(!nm2)return toast('Give it a name first');
+    if(!(cut>=1&&cut<=31))return toast('ตัด needs to be 1–31');
+    if(!(due>=1&&due<=31))return toast('Due day needs to be 1–31');
+    if(!(split>=0&&split<=12))return toast('แบ่ง needs to be 0–12');
+    c.name=nm2;c.cut=cut;c.due=due;c.split=split;
     if(/^#[0-9a-f]{6}$/i.test(col))c.c=col;
     await save();toast('Saved');return go('cards');
+  }
+  if(a==='deletecard'){
+    const c=card(V.cardId);
+    if(cardInUse(c.id))return toast('It has history — hide it instead');
+    return ask({kind:'deletecard',cardId:c.id,title:'Delete '+c.name+'?',
+      sub:'It has no purchases logged, so there\'s nothing to lose.',
+      cta:'Yes, delete it',cancel:'Keep it'});
   }
   if(a==='togglehide'){
     const c=card(V.cardId);
@@ -2001,9 +2043,10 @@ document.addEventListener('change',async e=>{
   }
   const fixed=repairOpen();
   if(fixed)setTimeout(()=>toast('Cleaned up '+fixed+' mismatched purchase'+(fixed>1?'s':'')),600);
+  if(!S.deletedCards)S.deletedCards=[];
   if(!S.cards||!S.cards.length)S.cards=CARDS.map(c=>({...c}));
   else{
-    CARDS.forEach(d=>{if(!S.cards.some(x=>x.id===d.id))S.cards.push({...d})});
+    CARDS.forEach(d=>{if(!S.cards.some(x=>x.id===d.id)&&!S.deletedCards.includes(d.id))S.cards.push({...d})});
     S.cards=S.cards.map(x=>{const d=CARDS.find(y=>y.id===x.id)||{};return{...d,...x}});
   }
   if(S.setup&&S.needSplit)V={view:'splitjars'};
