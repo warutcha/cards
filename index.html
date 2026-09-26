@@ -196,7 +196,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v16 · 22 Sep';
+const BUILD='v17 · 26 Sep';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -2281,6 +2281,10 @@ async function startReview(text){
   await save();draw();
   if(fixed)toast('Dates picked up: '+fixed);
 }
+document.addEventListener('input',e=>{
+  if(e.target.id==='note')V.note=e.target.value;
+  if(e.target.id==='dt')V.date=e.target.value;
+});
 document.addEventListener('change',async e=>{
   if(e.target.id==='restore'){
     const f=e.target.files[0];if(!f)return;
