@@ -196,7 +196,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v17 · 26 Sep';
+const BUILD='v18 · 27 Sep';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -473,6 +473,8 @@ function vConfirm(){
     <div class="big" style="color:${q.on};font-size:32px">${q.hero.amt}</div>
     ${q.hero.foot?`<div style="font-size:12px;color:${q.on};opacity:.85">${esc(q.hero.foot)}</div>`:''}
   </div>`:''}
+  ${(q.items||[]).length?`<div class="card">${q.items.map(it=>
+    `<div class="item"><div class="mut">${esc(it[0])}</div><div>${it[1]}</div></div>`).join('')}</div>`:''}
   ${(q.rows||[]).length?`<div class="card">${q.rows.map((r,i)=>
     `<div class="item"><div class="mut">${r[0]}</div><div style="${i===q.rows.length-1?'font-weight:600':''}">${r[1]}</div></div>`).join('')}</div>`:''}
   <button class="btn" ${q.color?`style="background:${q.color};color:#fff"`:''} data-act="confirmyes">${q.cta}</button>
@@ -1798,10 +1800,15 @@ document.addEventListener('click',async e=>{
     const bits=[];
     if(td.txns.length)bits.push(td.txns.length+' purchase'+(td.txns.length>1?'s':''));
     if(td.plans.length)bits.push(td.plans.length+' แบ่ง payment'+(td.plans.length>1?'s':''));
+    const items=[
+      ...td.txns.map(t=>[t.note||'—',B2(t.reserved)]),
+      ...td.plans.map(p=>[(p.title||p.planTitle||'—')+' (แบ่ง)',B2(up(p.monthly,autoStep(p.monthly)))])
+    ];
     return ask({kind:'move',jar:j.id,title:'Moved the money?',
       sub:'Tap yes once you\'ve made the transfer in your banking app.',
       tint:dark()?'#BA751726':'#FAEEDA',on:dark()?'#EF9F27':'#633806',color:'#BA7517',
       hero:{top:j.name,amt:B(td.amt),foot:bits.join(' · ')},
+      items,
       rows:[[j.name+' now',B2(jarBal(j))],['After this',B2(jarBal(j)+td.amt)]],
       cta:'Yes, I\'ve moved it',note:'You can undo this later from History.'});
   }
