@@ -122,6 +122,125 @@ async function save(){
   S.updated=new Date().toISOString();
   await saveLocal();
   queueSync();
+  queuePush();
+}
+
+/* ---- reminders: a push nudge if money is still unmoved 3 hours after logging ---- */
+const PCFG='cards:push';
+function pcfg(){try{return JSON.parse(localStorage.getItem(PCFG)||'{}')}catch(e){return{}}}
+function setPcfg(o){try{localStorage.setItem(PCFG,JSON.stringify(o))}catch(e){}}
+const pushOn=()=>{const c=pcfg();return !!(c.on&&c.url&&c.key)};
+function b64u(s){
+  s=s.replace(/-/g,'+').replace(/_/g,'/');
+  const r=atob(s+'='.repeat((4-s.length%4)%4));
+  return Uint8Array.from(r,ch=>ch.charCodeAt(0));
+}
+async function pushCall(path,body){
+  const c=pcfg();
+  const r=await fetch(c.url.replace(/\/+$/,'')+path,{method:'POST',
+    headers:{'content-type':'application/json','x-key':c.key},body:JSON.stringify(body)});
+  if(!r.ok)throw new Error(r.status===401?'key':'http '+r.status);
+  return r.json().catch(()=>({}));
+}
+function pushItems(){
+  // only purchases logged from this version on carry a time, so old ones never trigger a reminder
+  return S.txns.filter(t=>!t.moved&&t.at).map(t=>{
+    let jar='';try{jar=jarOfCard(t.cardId).name}catch(e){}
+    return{id:t.id,jar,amt:t.reserved,note:t.note,at:t.at};
+  });
+}
+async function pushSubscription(){
+  if(!('serviceWorker' in navigator))return null;
+  const reg=await navigator.serviceWorker.getRegistration();
+  return reg?await reg.pushManager.getSubscription():null;
+}
+async function pushNow(){
+  if(!pushOn())return;
+  const sub=await pushSubscription();if(!sub)return;
+  await pushCall('/sub',{sub:sub.toJSON(),items:pushItems()});
+}
+let pushT=null;
+function queuePush(){
+  if(!pushOn())return;
+  clearTimeout(pushT);
+  pushT=setTimeout(()=>pushNow().catch(()=>{}),2000);
+}
+async function pushEnable(){
+  const url=(document.getElementById('pushurl').value||'').trim().replace(/\/+$/,'');
+  const key=(document.getElementById('pushkey').value||'').trim();
+  if(!url||!key)return toast('Paste both the address and the key');
+  if(!('serviceWorker' in navigator)||!('PushManager' in window)||!('Notification' in window))
+    return toast('Open the app from your home-screen icon first');
+  try{
+    toast('Setting up…');
+    const reg=await navigator.serviceWorker.register('sw.js?w='+encodeURIComponent(url));
+    await navigator.serviceWorker.ready;
+    const kr=await fetch(url+'/key');
+    if(!kr.ok)throw new Error('worker');
+    const pub=(await kr.json()).key;
+    const perm=await Notification.requestPermission();
+    if(perm!=='granted')return toast('Notifications are blocked — allow them in iPhone Settings → Cards');
+    const want=b64u(pub);
+    let sub=await reg.pushManager.getSubscription();
+    if(sub){
+      const have=sub.options&&sub.options.applicationServerKey;
+      if(have&&(have.byteLength!==want.length||!new Uint8Array(have).every((v,i)=>v===want[i]))){
+        await sub.unsubscribe();sub=null;
+      }
+    }
+    if(!sub)sub=await reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:want});
+    setPcfg({url,key,on:true});
+    await pushNow();
+    toast('Reminders on');
+  }catch(err){
+    toast(err.message==='key'?'That key isn\'t right':'Couldn\'t set it up — check the address');
+  }
+  draw();
+}
+async function pushDisable(){
+  try{
+    const sub=await pushSubscription();
+    if(sub){await pushCall('/unsub',{endpoint:sub.endpoint}).catch(()=>{});await sub.unsubscribe();}
+  }catch(e){}
+  const c=pcfg();setPcfg({url:c.url,key:c.key,on:false});
+  toast('Reminders off');draw();
+}
+async function pushTest(){
+  try{
+    await pushNow();
+    const sub=await pushSubscription();
+    await pushCall('/test',{endpoint:sub.endpoint});
+    toast('Sent — it should arrive in a few seconds');
+  }catch(e){toast('Couldn\'t send the test')}
+}
+function vNotify(){
+  const c=pcfg(),on=pushOn();
+  const standalone=navigator.standalone===true||(window.matchMedia&&matchMedia('(display-mode: standalone)').matches);
+  const good=dark()?'#5DCAA5':'#0B6B4F',warn=dark()?'#EF9F27':'#8A5209';
+  let h=`<button class="back" data-go="settings">‹ Back</button>
+  <h1>Reminders</h1>
+  <div class="mut" style="margin-top:-8px">A notification if money is still waiting to be moved 3 hours after you logged the purchase — even when the app is closed.</div>
+  <div class="sp"></div>`;
+  if(!standalone)h+=`<div class="tile" style="background:${dark()?'#BA751726':'#FAEEDA'}">
+    <div class="mut" style="color:${warn}">Open the app from your home-screen icon — iPhone only allows notifications there.</div></div>`;
+  if(on){
+    h+=`<div class="tile" style="background:${dark()?'#1D9E7526':'#E1F5EE'}">
+      <div class="nm" style="color:${good}">✓ Turned on</div>
+      <div class="mut" style="color:${good};opacity:.9;margin-top:4px">Only purchases logged from now on are tracked.</div></div>
+    <button class="btn" data-act="pushtest">Send a test notification</button>
+    <div class="sp"></div>
+    <button class="btn ghost sm" data-act="pushoff">Turn off on this phone</button>`;
+    return h;
+  }
+  h+=`<div class="card">
+    <div class="mut" style="margin-bottom:8px">Worker address</div>
+    <input id="pushurl" placeholder="https://cards-push.yourname.workers.dev" value="${esc(c.url||'')}" autocapitalize="off" autocorrect="off">
+    <div class="sp"></div>
+    <div class="mut" style="margin-bottom:8px">Key</div>
+    <input id="pushkey" placeholder="The key you set in Cloudflare" value="${esc(c.key||'')}" autocapitalize="off" autocorrect="off">
+  </div>
+  <button class="btn" data-act="pushon">Turn on reminders</button>`;
+  return h;
 }
 
 /* ---- GitHub ---- */
@@ -196,7 +315,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v18 · 27 Sep';
+const BUILD='v19 · 21 Oct';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -448,6 +567,7 @@ function draw(){
   else if(v==='jarone')h=vJarOne();
   else if(v==='jars')h=vJars();
   else if(v==='sync')h=vSync();
+  else if(v==='notify')h=vNotify();
   else if(v==='jaredit')h=vJarEdit();
   else if(v==='splitjars')h=vSplitJars();
   else if(v==='bill')h=vBill();
@@ -1372,6 +1492,8 @@ function vSettings(){
   <button class="btn ghost sm" data-go="jars">Your accounts</button>
   <div class="sp"></div>
   <button class="btn ghost sm" data-go="sync">Same data everywhere${ghOn()?(cfg().err?' · needs a look':' · on'):' · off'}</button>
+  <div class="sp"></div>
+  <button class="btn ghost sm" data-go="notify">Reminders${pushOn()?' · on':' · off'}</button>
   <div class="sp"></div><div class="sp"></div>
   <div class="card"><div class="nm">Bring in more notes</div>
     <div class="mut" style="margin:6px 0 10px">Safe to paste the same thing twice — it won't duplicate.</div>
@@ -2125,6 +2247,9 @@ document.addEventListener('click',async e=>{
     await save();toast(c.hidden?'Hidden from your home screen':'Showing again');
     return draw();
   }
+  if(a==='pushon')return pushEnable();
+  if(a==='pushoff')return pushDisable();
+  if(a==='pushtest')return pushTest();
   if(a==='savepwdate'){
     S.pwDate=document.getElementById('pwdate').value||'';await save();
     toast('Saved');return draw();
@@ -2260,12 +2385,12 @@ async function commit(split){
     S.plans.push({id:uid(),cardId:c.id,title:V.note||'—',total:amt,months:c.split,
       monthly,start:date,paid:0});
     S.txns.push({id:uid(),cardId:c.id,date,note:(V.note||'—'),actual:null,
-      reserved:r,moved:false,cyc:key,planTitle:V.note});
+      reserved:r,moved:false,cyc:key,planTitle:V.note,at:Date.now()});
     toast('แบ่ง '+c.split+'× · move '+B(r)+' this month');
   }else{
     const r=reserveFor(amt,V.rsv);
     S.txns.push({id:uid(),cardId:c.id,date,note:(V.note||'—'),actual:null,
-      reserved:r,moved:false,cyc:key});
+      reserved:r,moved:false,cyc:key,at:Date.now()});
     toast('Saved · set aside '+B(r));
   }
   await save();go('home');
@@ -2352,10 +2477,11 @@ document.addEventListener('change',async e=>{
   draw();
   // ask the phone not to bin our data when it tidies up
   try{if(navigator.storage&&navigator.storage.persist)navigator.storage.persist();}catch(e){}
+  queuePush();
   // then catch up with the online copy
   if(ghOn()){
     const r=await pullDown();
-    if(r==='pulled'){toast('Brought down your latest');draw();}
+    if(r==='pulled'){toast('Brought down your latest');draw();queuePush();}
     else if(r==='error'&&cfg().err==='key')toast('Sync key needs renewing');
   }
 })();
@@ -2365,6 +2491,6 @@ document.addEventListener('visibilitychange',async()=>{
   const c=cfg();
   if(c.last&&Date.now()-new Date(c.last).getTime()<60000)return;
   const r=await pullDown();
-  if(r==='pulled'){toast('Brought down your latest');draw();}
+  if(r==='pulled'){toast('Brought down your latest');draw();queuePush();}
 });
 </script>
