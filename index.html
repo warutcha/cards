@@ -88,8 +88,25 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
   display:flex;flex-direction:column;justify-content:flex-end;margin:6px auto 14px}
 .center{text-align:center}
 .sp{height:6px}
+/* floating menu bar */
+:root{--bar:rgba(255,255,255,.72);--shadow:0 10px 30px rgba(0,0,0,.16)}
+@media (prefers-color-scheme:dark){:root{--bar:rgba(38,36,33,.72);--shadow:0 10px 30px rgba(0,0,0,.6)}}
+.dock{display:none}
+body.float #app{padding-bottom:calc(112px + env(safe-area-inset-bottom))}
+body.float .dock{display:flex;position:fixed;left:0;right:0;bottom:calc(8px + env(safe-area-inset-bottom));
+  justify-content:center;padding:0 10px;pointer-events:none;z-index:30}
+.fbar{pointer-events:auto;width:100%;max-width:500px;display:flex;gap:1px;padding:5px;
+  background:var(--bar);-webkit-backdrop-filter:saturate(180%) blur(24px);backdrop-filter:saturate(180%) blur(24px);
+  border:1px solid var(--line);border-radius:30px;box-shadow:var(--shadow)}
+.fbar button{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;padding:8px 0 6px;
+  border-radius:25px;color:var(--tx3);font-size:10px;letter-spacing:.01em;white-space:nowrap}
+.fbar button svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+.fbar button.on{background:var(--line);color:var(--tx);font-weight:600}
+.fbar button:active{opacity:.65}
+body.float .toast{bottom:calc(96px + env(safe-area-inset-bottom))}
 </style>
 <div id="app"></div>
+<div class="dock"><nav class="fbar" id="fbar"></nav></div>
 <div class="sheet-bg" id="sheetBg" data-sheetclose></div>
 <div class="sheet" id="sheet"></div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -315,7 +332,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v19 · 21 Oct';
+const BUILD='v20 · 21 Oct';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -554,6 +571,7 @@ function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','
 function draw(){
   const v=V.view;
   let h='';
+  navCur=null;
   // sync has to be reachable before setup, so a new device can pull instead of starting over
   if(!S.setup&&v!=='setup'&&v!=='sync')return go('setup');
   if(V.confirm)h=vConfirm();
@@ -578,6 +596,7 @@ function draw(){
   else if(v==='history')h=vHistory();
   else if(v==='settings')h=vSettings();
   app().innerHTML=h;
+  drawDock();
   if(V.focus){const el=document.getElementById(V.focus);if(el)el.focus();}
 }
 
@@ -603,10 +622,23 @@ function vConfirm(){
   ${q.note?`<div class="mut" style="margin-top:12px">${q.note}</div>`:''}`;
 }
 function ask(o){V.confirm=o;draw();window.scrollTo(0,0);}
-function nav(cur){
-  const items=[['home','Home'],['spend','Spending'],['jar','Jar'],['bill','Check bill'],['history','History'],['settings','Settings']];
-  return '<div class="nav">'+items.map(([k,l])=>
-    `<button class="${k===cur?'on':''}" data-go="${k}">${l}</button>`).join('')+'</div>';
+/* the menu is one floating bar outside #app; views just say which tab is lit */
+const NAVITEMS=[['home','Home'],['spend','Spending'],['jar','Jar'],['bill','Check bill'],['history','History'],['settings','Settings']];
+const NAVICON={
+  home:'<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  spend:'<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>',
+  jar:'<rect x="3" y="7" width="18" height="13" rx="3"/><path d="M16 13h2"/><path d="M5 7l11-4v4"/>',
+  bill:'<path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9 8h6M9 12h6"/>',
+  history:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M19 5l-2 2M7 17l-2 2"/>'
+};
+let navCur=null;
+function nav(cur){navCur=cur;return '';}
+function drawDock(){
+  const fb=document.getElementById('fbar');
+  document.body.classList.toggle('float',!!navCur);
+  if(fb)fb.innerHTML=navCur?NAVITEMS.map(([k,l])=>
+    `<button class="${k===navCur?'on':''}" data-go="${k}"><svg viewBox="0 0 24 24">${NAVICON[k]}</svg>${l}</button>`).join(''):'';
 }
 
 /* ---------- setup ---------- */
