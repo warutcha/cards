@@ -332,7 +332,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v20 · 21 Oct';
+const BUILD='v21 · 21 Oct';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -1999,7 +1999,7 @@ document.addEventListener('click',async e=>{
   }
   if(g.go){if(g.go==='add')V={view:'add',amt:'',rsv:0,note:'',date:today()};
            else if(g.go==='bill')V={view:'bill',b:{step:'pick'}};
-           else V={view:g.go};return draw();}
+           else V={view:g.go};draw();window.scrollTo(0,0);return;}
   if(g.card)return go('card',{cardId:g.card});
   if(g.pick){V.cardId=g.pick;keepNote();return draw();}
   if(g.bpick){V.b.cardId=g.bpick;return draw();}
