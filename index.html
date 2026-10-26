@@ -332,7 +332,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v21 · 21 Oct';
+const BUILD='v22 · 26 Oct';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -1955,8 +1955,12 @@ document.addEventListener('click',async e=>{
     if(td.txns.length)bits.push(td.txns.length+' purchase'+(td.txns.length>1?'s':''));
     if(td.plans.length)bits.push(td.plans.length+' แบ่ง payment'+(td.plans.length>1?'s':''));
     const items=[
-      ...td.txns.map(t=>[t.note||'—',B2(t.reserved)]),
-      ...td.plans.map(p=>[(p.title||p.planTitle||'—')+' (แบ่ง)',B2(up(p.monthly,autoStep(p.monthly)))])
+      ...td.txns.map(t=>{
+        // the purchase that opened a แบ่ง plan is its first payment
+        const pl=t.planTitle!==undefined?S.plans.find(p=>p.cardId===t.cardId&&p.start===t.date&&p.title===(t.planTitle||'—')):null;
+        return[(t.note||'—')+(pl?' (แบ่ง 1/'+pl.months+')':''),B2(t.reserved)];
+      }),
+      ...td.plans.map(p=>[(p.title||p.planTitle||'—')+' (แบ่ง '+(p.paid+1)+'/'+p.months+')',B2(up(p.monthly,autoStep(p.monthly)))])
     ];
     return ask({kind:'move',jar:j.id,title:'Moved the money?',
       sub:'Tap yes once you\'ve made the transfer in your banking app.',
