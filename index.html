@@ -142,8 +142,17 @@ async function save(){
   queuePush();
 }
 
-/* ---- reminders: a push nudge if money is still unmoved 3 hours after logging ---- */
+/* ---- reminders: a push nudge if money is still unmoved 10 minutes after logging ---- */
 const PCFG='cards:push';
+const WAIT_MIN=10;
+function setBadge(){
+  // red number on the icon = purchases unmoved for 10+ minutes; gone once they're moved
+  try{
+    const n=pushItems().filter(i=>Date.now()-i.at>=WAIT_MIN*60e3).length;
+    if(n>0&&navigator.setAppBadge)navigator.setAppBadge(n);
+    else if(navigator.clearAppBadge)navigator.clearAppBadge();
+  }catch(e){}
+}
 function pcfg(){try{return JSON.parse(localStorage.getItem(PCFG)||'{}')}catch(e){return{}}}
 function setPcfg(o){try{localStorage.setItem(PCFG,JSON.stringify(o))}catch(e){}}
 const pushOn=()=>{const c=pcfg();return !!(c.on&&c.url&&c.key)};
@@ -173,6 +182,7 @@ async function pushSubscription(){
 }
 async function pushNow(){
   if(!pushOn())return;
+  setBadge();
   const sub=await pushSubscription();if(!sub)return;
   await pushCall('/sub',{sub:sub.toJSON(),items:pushItems()});
 }
@@ -236,7 +246,7 @@ function vNotify(){
   const good=dark()?'#5DCAA5':'#0B6B4F',warn=dark()?'#EF9F27':'#8A5209';
   let h=`<button class="back" data-go="settings">‹ Back</button>
   <h1>Reminders</h1>
-  <div class="mut" style="margin-top:-8px">A notification if money is still waiting to be moved 3 hours after you logged the purchase — even when the app is closed.</div>
+  <div class="mut" style="margin-top:-8px">A notification, with a red number on the app icon, if money is still waiting to be moved 10 minutes after you logged the purchase — even when the app is closed.</div>
   <div class="sp"></div>`;
   if(!standalone)h+=`<div class="tile" style="background:${dark()?'#BA751726':'#FAEEDA'}">
     <div class="mut" style="color:${warn}">Open the app from your home-screen icon — iPhone only allows notifications there.</div></div>`;
@@ -332,7 +342,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v22 · 26 Oct';
+const BUILD='v23 · 26 Oct';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},

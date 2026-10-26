@@ -14,13 +14,17 @@ self.addEventListener('push',e=>{
   e.waitUntil((async()=>{
     let title='Money still to move';
     let body='Open Cards to see what\'s waiting.';
+    let count=null;
     try{
       const sub=await self.registration.pushManager.getSubscription();
       if(sub&&W){
         const r=await fetch(W+'/msg?e='+await sha(sub.endpoint));
-        if(r.ok){const j=await r.json();title=j.title||title;body=j.body||body;}
+        if(r.ok){const j=await r.json();title=j.title||title;body=j.body||body;
+          if(typeof j.count==='number')count=j.count;}
       }
     }catch(_){}
+    // the red number on the home-screen icon
+    try{if(count!==null&&self.navigator.setAppBadge)await self.navigator.setAppBadge(count);}catch(_){}
     await self.registration.showNotification(title,{
       body,tag:'unmoved',icon:'icon-192.png',badge:'icon-192.png'
     });
