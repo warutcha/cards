@@ -8,6 +8,22 @@ async function sha(s){
 }
 
 self.addEventListener('install',()=>self.skipWaiting());
+
+/* always open the newest version of the app; fall back to the last copy when offline */
+self.addEventListener('fetch',e=>{
+  const r=e.request;
+  if(r.method!=='GET'||r.mode!=='navigate')return;
+  e.respondWith((async()=>{
+    const cache=await caches.open('cards-page');
+    try{
+      const res=await fetch(r,{cache:'no-store'});
+      if(res&&res.ok)cache.put(r,res.clone());
+      return res;
+    }catch(_){
+      return (await cache.match(r))||(await cache.match('./'))||Response.error();
+    }
+  })());
+});
 self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
 
 self.addEventListener('push',e=>{
@@ -23,8 +39,12 @@ self.addEventListener('push',e=>{
           if(typeof j.count==='number')count=j.count;}
       }
     }catch(_){}
-    // the red number on the home-screen icon
-    try{if(count!==null&&self.navigator.setAppBadge)await self.navigator.setAppBadge(count);}catch(_){}
+    // the red number on the home-screen icon — but if the app is open, it keeps the number itself
+    try{
+      const open=await self.clients.matchAll({type:'window',includeUncontrolled:true});
+      const seen=open.some(c=>c.visibilityState==='visible');
+      if(!seen&&count!==null&&self.navigator.setAppBadge)await self.navigator.setAppBadge(count);
+    }catch(_){}
     await self.registration.showNotification(title,{
       body,tag:'unmoved',icon:'icon-192.png',badge:'icon-192.png'
     });

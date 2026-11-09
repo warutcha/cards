@@ -138,6 +138,7 @@ async function saveLocal(){
 async function save(){
   S.updated=new Date().toISOString();
   await saveLocal();
+  setBadge();            // right now — the phone may be left before the delayed push below runs
   queueSync();
   queuePush();
 }
@@ -185,12 +186,15 @@ async function pushNow(){
   setBadge();
   const sub=await pushSubscription();if(!sub)return;
   await pushCall('/sub',{sub:sub.toJSON(),items:pushItems()});
+  const c=pcfg();if(c.err){delete c.err;setPcfg(c);}
 }
 let pushT=null;
 function queuePush(){
   if(!pushOn())return;
   clearTimeout(pushT);
-  pushT=setTimeout(()=>pushNow().catch(()=>{}),2000);
+  pushT=setTimeout(()=>pushNow().catch(e=>{
+    const c=pcfg();c.err=(e&&e.message==='key')?'key':'net';setPcfg(c);
+  }),2000);
 }
 async function pushEnable(){
   const url=(document.getElementById('pushurl').value||'').trim().replace(/\/+$/,'');
@@ -254,6 +258,9 @@ function vNotify(){
     h+=`<div class="tile" style="background:${dark()?'#1D9E7526':'#E1F5EE'}">
       <div class="nm" style="color:${good}">✓ Turned on</div>
       <div class="mut" style="color:${good};opacity:.9;margin-top:4px">Only purchases logged from now on are tracked.</div></div>
+    ${c.err?`<div class="tile" style="background:${dark()?'#BA751726':'#FAEEDA'}"><div class="mut" style="color:${warn}">${c.err==='key'
+      ?'The key no longer matches the one in Cloudflare, so your list of unmoved purchases isn\'t reaching it. Turn reminders off, then on again with the right key.'
+      :'Couldn\'t reach Cloudflare, so reminders may be out of date. Tap the button below to try again.'}</div></div>`:''}
     <button class="btn" data-act="pushtest">Send a test notification</button>
     <div class="sp"></div>
     <button class="btn ghost sm" data-act="pushoff">Turn off on this phone</button>`;
@@ -342,7 +349,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v23 · 26 Oct';
+const BUILD='v24 · 9 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -2531,6 +2538,11 @@ document.addEventListener('change',async e=>{
     else if(r==='error'&&cfg().err==='key')toast('Sync key needs renewing');
   }
 })();
+/* keep the icon's red number honest whenever the app comes or goes */
+document.addEventListener('visibilitychange',()=>{
+  setBadge();
+  if(document.visibilityState==='visible')queuePush();
+});
 /* coming back to the app after a while is a good moment to check */
 document.addEventListener('visibilitychange',async()=>{
   if(document.visibilityState!=='visible'||!ghOn())return;
