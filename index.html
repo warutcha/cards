@@ -88,6 +88,18 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
   display:flex;flex-direction:column;justify-content:flex-end;margin:6px auto 14px}
 .center{text-align:center}
 .sp{height:6px}
+.tag{display:inline-block;font-size:11px;font-weight:700;letter-spacing:.04em;padding:3px 8px;border-radius:8px}
+.t-bank{background:#FAEEDA;color:#633806}.t-app{background:#E6F0FB;color:#1C5AA8}
+@media (prefers-color-scheme:dark){.t-bank{background:#BA751726;color:#EF9F27}.t-app{background:#378ADD26;color:#85B7EB}}
+.sm2{font-size:11px;padding:2px 8px;border-radius:8px;font-weight:600;display:inline-block;margin:6px 6px 0 0}
+.sm2.y{background:#E1F5EE;color:#0B6B4F}.sm2.n{background:#FCE8E6;color:#A3261C}
+@media (prefers-color-scheme:dark){.sm2.y{background:#1D9E7526;color:#5DCAA5}.sm2.n{background:#E24B4A26;color:#F09595}}
+.hfil{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 10px}
+.hfil select{width:auto;font-size:13px;padding:8px 10px;border-radius:12px;color:var(--tx2)}
+.hfil button{font-size:13px;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--line);color:var(--tx2)}
+.hfil button.on{background:var(--ink);color:var(--onink);border-color:var(--ink)}
+mark{background:#FFE9A8;color:#1F1E1C;border-radius:4px;padding:0 2px}
+@media (prefers-color-scheme:dark){mark{background:#6B5300;color:#F2F0EC}}
 /* floating menu bar */
 :root{--bar:rgba(255,255,255,.72);--shadow:0 10px 30px rgba(0,0,0,.16)}
 @media (prefers-color-scheme:dark){:root{--bar:rgba(38,36,33,.72);--shadow:0 10px 30px rgba(0,0,0,.6)}}
@@ -349,7 +361,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v24 · 9 Nov';
+const BUILD='v25 · 11 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -1253,6 +1265,7 @@ function vBill(){
   }
   if(b.step==='cbedit')return vCashbackEdit();
   if(b.step==='review'){
+    if(b.stage==='match')return vMatch();
     const q=b.queue[b.i];
     if(!q)return (b.cb&&!b.cbDone)?vCashback():vBillDone();
     const c=card(b.cardId);
@@ -1275,6 +1288,54 @@ function vBill(){
     <button class="btn ghost sm" data-act="qskipall">Skip all ${b.queue.length-b.i}</button>`:''}`;
   }
   return (b.cb&&!b.cbDone)?vCashback():vBillDone();
+}
+/* one statement line next to the purchase the app thinks it is */
+function pairBlock(L,t){
+  const c=cardOrGhost(t.cardId);
+  const exact=Math.abs(t.reserved-L.amt)<0.01||t.reserved===up(L.amt,autoStep(L.amt));
+  const days=Math.round(Math.abs(parse(t.date)-parse(L.date))/864e5);
+  const same=nameSim(L.desc,t.note)>=0.6;
+  return `<div class="bk" style="background:${dark()?'#BA751726':'#FAEEDA'};border-radius:14px;padding:12px;margin-bottom:8px">
+      <span class="tag t-bank">FROM YOUR STATEMENT</span>
+      <div class="row" style="margin-top:6px"><div style="font-size:14px;font-weight:600;word-break:break-word">${esc(L.desc)}</div><div style="font-weight:650">${B2(L.amt)}</div></div>
+      <div class="mut">${shortDate(L.date)}</div></div>
+    <div style="background:${dark()?'#378ADD26':'#E6F0FB'};border-radius:14px;padding:12px">
+      <span class="tag t-app">FROM YOUR APP</span>
+      <div class="row" style="margin-top:6px"><div style="font-size:14px;font-weight:600"><span class="dot" style="background:${c.c};display:inline-block;width:10px;height:10px;margin-right:7px"></span>${esc(t.note)}</div><div style="font-weight:650">${B2(t.reserved)}</div></div>
+      <div class="mut">${esc(c.name)} · ${shortDate(t.date)}</div></div>
+    <div>${exact?'<span class="sm2 y">✓ same amount</span>':`<span class="sm2 n">≈ ${B2(t.reserved)} set aside vs ${B2(L.amt)} billed</span>`}
+      ${days===0?'<span class="sm2 y">✓ same day</span>':days<=3?`<span class="sm2 y">${days} day${days>1?'s':''} apart</span>`:`<span class="sm2 n">${days} days apart</span>`}
+      ${same?'<span class="sm2 y">✓ similar name</span>':'<span class="sm2 n">≠ name differs</span>'}</div>`;
+}
+function vMatch(){
+  const b=V.b,c=card(b.cardId);
+  const good=dark()?'#5DCAA5':'#0B6B4F';
+  let h=`<div class="lbl">${esc(c.name)} bill${b.closing?' · '+shortDate(b.closing):''}</div>
+  <h1 style="margin-top:6px">Is this the same?</h1>
+  <div class="mut" style="margin-top:-8px">Left over from your statement, matched with what you logged. Nothing changes until you say yes.</div><div class="sp"></div>`;
+  if(b.sure.length){
+    h+=`<div class="tile" style="background:${dark()?'#1D9E7526':'#E1F5EE'}">
+      <div class="row"><div><div class="nm" style="color:${good}">${b.sure.length} sure match${b.sure.length>1?'es':''}</div>
+        <div class="mut" style="color:${good};opacity:.9">same amount, same week or same name</div></div>
+        <button class="btn sm" style="width:auto;white-space:nowrap;padding:10px 16px;background:${dark()?'#5DCAA5':'#0B6B4F'};color:${dark()?'#161513':'#fff'}" data-act="msureall">Confirm all</button></div></div>
+    <div class="card" style="padding:4px 16px">${b.sure.map((x,i)=>{const t=S.txns.find(y=>y.id===x.tid);if(!t)return '';
+      return `<div class="item" style="display:block"><div class="row"><span class="tag t-bank">STATEMENT</span><span style="font-size:13px;font-weight:600">${B2(x.L.amt)}</span></div>
+      <div style="font-size:13px;margin:2px 0 6px;word-break:break-word">${esc(x.L.desc)} <span class="mut">· ${shortDate(x.L.date)}</span></div>
+      <div class="row"><span class="tag t-app">YOUR APP</span><span style="font-size:13px;font-weight:600">${B2(t.reserved)}</span></div>
+      <div style="font-size:13px;margin:2px 0 4px">${esc(t.note)} <span class="mut">· ${shortDate(t.date)}</span></div>
+      <button class="undo" data-act="msurenot" data-i="${i}">Not the same</button></div>`}).join('')}</div>`;
+  }
+  if(b.maybe.length){
+    h+=`<div class="mut" style="margin:12px 0 8px">MAYBE — ${b.maybe.length} to check</div>`;
+    const m=b.maybe[0],o=m.opts[m.ci],t=S.txns.find(y=>y.id===o.tid);
+    h+=`<div class="card pad" style="padding:16px">${t?pairBlock(m.L,t):''}
+      <div class="sp"></div><button class="btn" style="background:${dark()?'#5DCAA5':'#0B6B4F'};color:${dark()?'#161513':'#fff'}" data-act="msame">Yes, same purchase</button>
+      <div class="sp"></div><button class="btn ghost" data-act="mnot">No — it's not in my notes</button>
+      ${m.opts.length>1?`<div class="sp"></div><button class="btn ghost sm" data-act="mnext">Show another guess (${m.ci+1} of ${m.opts.length})</button>`:''}</div>`;
+  }
+  if(!b.sure.length&&!b.maybe.length)h+=`<button class="btn" data-act="mdone">Continue</button>`;
+  else if(!b.maybe.length)h+=`<div class="mut" style="text-align:center;margin-top:6px">Confirm the sure matches to continue</div>`;
+  return h;
 }
 function vCashback(){
   const b=V.b,c=card(b.cardId),cb=b.cb;
@@ -1473,7 +1534,69 @@ function vSync(){
 }
 
 /* ---------- history / settings ---------- */
+/* ---------- search ---------- */
+function isInst(t){return t.planTitle!==undefined||S.plans.some(p=>p.cardId===t.cardId&&p.title===t.note)}
+function perRange(per){
+  const td=today();
+  if(per==='month')return[td.slice(0,7)+'-01',td];
+  if(per==='30')return[addDays(td,-30),td];
+  if(per==='90')return[addDays(td,-90),td];
+  if(per==='year')return[td.slice(0,4)+'-01-01',td];
+  return null;
+}
+function searchHits(){
+  const f=V.hs||{};
+  const words=squash0(f.q||'').split(' ').filter(Boolean);
+  const pr=perRange(f.per),rg={a:[0,100],b:[100,500],c:[500,1000],d:[1000,1e9]}[f.rng];
+  return S.txns.filter(t=>{
+    if(f.card&&t.cardId!==f.card)return false;
+    if(pr&&(t.date<pr[0]||t.date>pr[1]))return false;
+    const a=txnAmt(t);
+    if(rg&&!(a>=rg[0]&&a<rg[1]))return false;
+    if(f.todo&&t.moved)return false;
+    if(f.inst&&!isInst(t))return false;
+    if(words.length){
+      const hay=squash0([t.note,cardOrGhost(t.cardId).name,String(t.reserved),t.actual!=null?String(t.actual):'',shortDate(t.date),t.date].join(' '));
+      if(!words.every(w=>hay.includes(w)))return false;
+    }
+    return true;
+  }).sort((a,b)=>a.date<b.date?1:a.date>b.date?-1:0);
+}
+const squash0=x=>String(x||'').toLowerCase().replace(/\s+/g,' ').trim();
+function hiText(text,q){
+  const words=squash0(q).split(' ').filter(w=>w.length);
+  let out=esc(text);
+  words.forEach(w=>{const r=w.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');out=out.replace(new RegExp('('+r+')(?![^<]*>)','ig'),'<mark>$1</mark>');});
+  return out;
+}
+function searchActive(){const f=V.hs||{};return !!(f.q||f.card||f.per||f.rng||f.todo||f.inst)}
+function histResults(){
+  const f=V.hs||{};
+  if(!searchActive())return '';
+  const rows=searchHits(),sum=rows.reduce((s,t)=>s+txnAmt(t),0);
+  const shown=rows.slice(0,100);
+  return `<div class="tile" style="background:${dark()?'#378ADD26':'#E6F0FB'};padding:16px">
+    <div class="mut" style="color:${dark()?'#85B7EB':'#1C5AA8'}">${rows.length} purchase${rows.length===1?'':'s'}${f.q?' matching “'+esc(f.q)+'”':''}</div>
+    <div class="big" style="color:${dark()?'#85B7EB':'#1C5AA8'}">${B2(sum)}</div></div>
+  <div class="card" style="padding:4px 16px">${shown.map(t=>{const c=cardOrGhost(t.cardId);
+    return `<div class="item"><div><div style="font-size:14px"><span class="dot" style="background:${c.c};display:inline-block;width:11px;height:11px;vertical-align:middle"></span>&nbsp;${hiText(t.note||'—',f.q)}</div>
+      <div class="mut" style="margin-left:19px">${esc(c.name)} · ${shortDate(t.date)}${t.moved?'':' · to move'}${isInst(t)?' · แบ่ง':''}${t.actual!=null?'':' · estimate'}</div></div>
+      <div style="font-size:14px;font-weight:600">${B2(txnAmt(t))}</div></div>`}).join('')||'<div class="item mut">Nothing found</div>'}</div>
+  ${rows.length>100?`<div class="mut" style="text-align:center">Showing the newest 100 of ${rows.length}</div>`:''}`;
+}
 function vHistory(){
+  const f=V.hs||(V.hs={});
+  const opt=(v,l,cur)=>`<option value="${v}"${cur===v?' selected':''}>${l}</option>`;
+  const search=`<div style="display:flex;align-items:center;gap:8px;background:var(--card);border:1px solid var(--line2);border-radius:14px;padding:2px 14px;margin-bottom:10px">
+    <span style="color:var(--tx3)">⌕</span><input id="hq" value="${esc(f.q||'')}" placeholder="Search a name, amount or card" style="border:0;padding:11px 0;background:none" autocapitalize="off" autocorrect="off">
+    ${f.q?'<button class="undo" data-act="hclear" style="text-decoration:none;font-size:18px">✕</button>':''}</div>
+    <div class="hfil">
+      <select data-hf="card">${opt('','All cards',f.card||'')}${S.cards.map(c=>opt(c.id,esc(c.name),f.card||'')).join('')}</select>
+      <select data-hf="per">${opt('','Any time',f.per||'')}${opt('month','This month',f.per)}${opt('30','Last 30 days',f.per)}${opt('90','Last 3 months',f.per)}${opt('year','This year',f.per)}</select>
+      <select data-hf="rng">${opt('','Any amount',f.rng||'')}${opt('a','Under ฿100',f.rng)}${opt('b','฿100–500',f.rng)}${opt('c','฿500–1,000',f.rng)}${opt('d','฿1,000+',f.rng)}</select>
+      <button class="${f.todo?'on':''}" data-act="htodo">Still to move</button>
+      <button class="${f.inst?'on':''}" data-act="hinst">แบ่ง</button></div>
+    <div id="hres">${histResults()}</div>`;
   const log=(S.log||[]).filter(x=>Date.now()-new Date(x.t).getTime()<7*864e5);
   const done=S.cycles.filter(c=>c.status==='paid').sort((a,b)=>a.closing<b.closing?1:-1);
   let h=`<h1>History</h1><div class="mut" style="margin-top:-8px">${S.txns.length} purchases kept. Nothing is ever deleted.</div><div class="sp"></div>`;
@@ -1491,6 +1614,7 @@ function vHistory(){
     });
     h+='</div>';
   }
+  h=h.replace('<div class="sp"></div>','<div class="sp"></div>'+search+'<div id="hrest" style="display:'+(searchActive()?'none':'block')+'">');
   h+='<div class="mut" style="margin-bottom:10px">CLOSED CYCLES</div>';
   if(!done.length)h+='<div class="card"><div class="mut">No closed cycles yet.</div></div>';
   done.forEach(cy=>{const c=card(cy.cardId);
@@ -1499,7 +1623,7 @@ function vHistory(){
       <div class="row"><span class="nm" style="color:${c.c}">${esc(c.name)}</span><span class="nm">${B2(cy.total)}</span></div>
       <div class="row"><span class="mut">closed ${shortDate(cy.closing)} · ${n} purchase${n===1?'':'s'} · paid${cy.paidOn?' '+shortDate(cy.paidOn):''}</span>
       <span class="mut">›</span></div></div>`});
-  return h+nav('history');
+  return h+'</div>'+nav('history');
 }
 function vCycle(){
   const cy=S.cycles.find(x=>x.key===V.cycKey);
@@ -1781,18 +1905,29 @@ function findCashback(text){
 }
 
 /* matching */
+/* squash a name to letters+digits so "SHOPEE-FOOD TH" and "shopeefood" compare equal */
+const squash=x=>String(x||'').toLowerCase().replace(/[^a-z0-9\u0E00-\u0E7F]/g,'');
+function nameSim(bank,mine){
+  const a=squash(bank),b=squash(mine);
+  if(!a||!b||b==='—')return 0;
+  if(a.includes(b)||b.includes(a))return 1;
+  const al=(S.alias||{})[a.slice(0,6)];
+  if(al&&squash(al)===b)return 1;
+  // shared leading letters, e.g. "711" vs "7-eleven" won't match, "lazada" vs "lazada gq jolly bear" will
+  let n=0;while(n<a.length&&n<b.length&&a[n]===b[n])n++;
+  return n>=4?Math.min(1,n/Math.min(a.length,b.length)):0;
+}
+function learnAlias(bankDesc,mine){
+  const k=squash(bankDesc).slice(0,6);if(k.length<4||nameSim(bankDesc,mine)===1)return;
+  S.alias=S.alias||{};S.alias[k]=mine;
+}
+/* propose matches; nothing is changed until the person says yes */
 function runMatch(cardId,parsed,closing){
-  const c=card(cardId);
-  // only consider purchases that could actually be on this bill
   const lo=closing?parse(closing)-50*864e5:null;
   const hi=closing?parse(closing).getTime():null;
-  const inWindow=t=>{
-    if(!closing)return true;
-    const d=parse(t.date).getTime();
-    return d<=hi&&d>=lo;
-  };
+  const inWindow=t=>{if(!closing)return true;const d=parse(t.date).getTime();return d<=hi&&d>=lo;};
   const pool=S.txns.filter(t=>t.cardId===cardId&&!t.actual&&inWindow(t));
-  let matched=0;const queue=[];let reservedSum=0;
+  let matched=0,reservedSum=0;const queue=[],cand=[];
   parsed.lines.forEach(L=>{
     if(L.bank)return;
     if(L.seq&&L.of){
@@ -1804,12 +1939,33 @@ function runMatch(cardId,parsed,closing){
       }
       queue.push(L);return;
     }
-    const hit=pool.filter(t=>!t.actual&&t.reserved>=L.amt*0.97&&t.reserved<=L.amt*1.25)
-      .sort((a,b)=>Math.abs(parse(a.date)-parse(L.date))-Math.abs(parse(b.date)-parse(L.date)))[0];
-    if(hit){hit.actual=L.amt;matched++;reservedSum+=hit.reserved;}
-    else queue.push(L);
+    const list=[];
+    pool.forEach(t=>{
+      const sim=nameSim(L.desc,t.note);
+      const exact=Math.abs(t.reserved-L.amt)<0.01||t.reserved===up(L.amt,autoStep(L.amt));
+      const near=t.reserved>=L.amt*0.97&&t.reserved<=L.amt*1.25;
+      const loose=sim>=0.6&&t.reserved>=L.amt*0.5&&t.reserved<=L.amt*1.6;
+      if(!exact&&!near&&!loose)return;
+      const days=Math.abs(parse(t.date)-parse(L.date))/864e5;
+      const score=(exact?0.5:near?0.3:0.1)+(days<=3?0.2:days<=10?0.1:0)+0.3*sim;
+      list.push({tid:t.id,score,exact,days,sim});
+    });
+    list.sort((a,b)=>b.score-a.score);
+    if(list.length)cand.push({L,list});else queue.push(L);
   });
-  return{matched,queue,reservedSum};
+  // "sure" = same amount and (same week or same name); each purchase is claimed once
+  const sure=[],maybe=[],taken=new Set();
+  cand.slice().sort((a,b)=>b.list[0].score-a.list[0].score).forEach(c=>{
+    const best=c.list.find(x=>!taken.has(x.tid));
+    if(best&&best.exact&&(best.days<=3||best.sim>=0.6)){taken.add(best.tid);sure.push({L:c.L,tid:best.tid,exact:true,days:best.days,sim:best.sim});}
+    else c._maybe=true;
+  });
+  cand.filter(c=>c._maybe).forEach(c=>{
+    const opts=c.list.filter(x=>!taken.has(x.tid)).slice(0,3);
+    if(opts.length&&opts[0].score>=0.35)maybe.push({L:c.L,opts,ci:0});else queue.push(c.L);
+  });
+  queue.sort((a,b)=>a.date<b.date?-1:1);
+  return{matched,queue,reservedSum,sure,maybe};
 }
 
 /* ---------------- pdf ---------------- */
@@ -2343,6 +2499,36 @@ document.addEventListener('click',async e=>{
     }
   }
   if(a==='bcancel')return go('bill',{b:{step:'pick'}});
+  if(a==='hclear'){V.hs=V.hs||{};V.hs.q='';return draw();}
+  if(a==='htodo'){V.hs=V.hs||{};V.hs.todo=!V.hs.todo;return draw();}
+  if(a==='hinst'){V.hs=V.hs||{};V.hs.inst=!V.hs.inst;return draw();}
+  if(a==='msureall'){
+    const b=V.b;
+    b.sure.forEach(x=>{const t=S.txns.find(y=>y.id===x.tid);if(!t||t.actual)return;
+      t.actual=x.L.amt;learnAlias(x.L.desc,t.note);b.matched++;b.reservedSum+=t.reserved;});
+    b.sure=[];if(!b.maybe.length)b.stage=null;
+    await save();return draw();
+  }
+  if(a==='msurenot'){
+    const b=V.b,i=+g.i,x=b.sure[i];if(!x)return;
+    b.queue.push(x.L);b.sure.splice(i,1);return draw();
+  }
+  if(a==='msame'){
+    const b=V.b,m=b.maybe[0],o=m.opts[m.ci],t=S.txns.find(y=>y.id===o.tid);
+    if(t&&!t.actual){t.actual=m.L.amt;learnAlias(m.L.desc,t.note);b.matched++;b.reservedSum+=t.reserved;}
+    // that purchase is spoken for — drop it from the other guesses
+    b.maybe.shift();b.maybe.forEach(y=>{y.opts=y.opts.filter(z=>z.tid!==o.tid);y.ci=0;});
+    b.maybe=b.maybe.filter(y=>{if(y.opts.length)return true;b.queue.push(y.L);return false;});
+    if(!b.maybe.length&&!b.sure.length)b.stage=null;
+    await save();return draw();
+  }
+  if(a==='mnot'){
+    const b=V.b,m=b.maybe.shift();b.queue.push(m.L);
+    if(!b.maybe.length&&!b.sure.length)b.stage=null;
+    return draw();
+  }
+  if(a==='mnext'){const m=V.b.maybe[0];m.ci=(m.ci+1)%m.opts.length;return draw();}
+  if(a==='mdone'){V.b.stage=null;return draw();}
   if(a==='qadd'){
     const q=V.b.queue[V.b.i],c=card(V.b.cardId);
     const key=cycKey(c,q.date);ensureCycle(key);
@@ -2461,14 +2647,24 @@ async function startReview(text){
   const r=runMatch(V.b.cardId,parsed,cd&&cd.closing);
   const cb=findCashback(text);
   V.b={...V.b,step:'review',lines:parsed.lines,queue:r.queue,i:0,
+       sure:r.sure,maybe:r.maybe,stage:(r.sure.length||r.maybe.length)?'match':null,
        matched:r.matched,reservedSum:r.reservedSum,total:parsed.total||'',added:0,flagged:0,
        closing:cd&&cd.closing,due:cd&&cd.due,fixed,cb,cbDone:false};
   await save();draw();
   if(fixed)toast('Dates picked up: '+fixed);
 }
 document.addEventListener('input',e=>{
+  if(e.target.id==='hq'){
+    V.hs=V.hs||{};V.hs.q=e.target.value;
+    const r=document.getElementById('hres'),rest=document.getElementById('hrest');
+    if(r)r.innerHTML=histResults();if(rest)rest.style.display=searchActive()?'none':'block';return;
+  }
   if(e.target.id==='note')V.note=e.target.value;
   if(e.target.id==='dt')V.date=e.target.value;
+});
+document.addEventListener('change',e=>{
+  const k=e.target.dataset&&e.target.dataset.hf;
+  if(k){V.hs=V.hs||{};V.hs[k]=e.target.value;draw();}
 });
 document.addEventListener('change',async e=>{
   if(e.target.id==='restore'){
