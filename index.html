@@ -26,7 +26,7 @@
 html,body{margin:0;padding:0;background:var(--bg);color:var(--tx);
   font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",system-ui,"Noto Sans Thai",sans-serif;
   font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
-#app{max-width:520px;margin:0 auto;padding:16px 16px calc(24px + env(safe-area-inset-bottom));min-height:100vh}
+#app{max-width:520px;margin:0 auto;padding:36px 16px calc(24px + env(safe-area-inset-bottom));min-height:100vh}
 h1{font-size:26px;font-weight:650;margin:2px 0 14px;letter-spacing:-.02em}
 .lbl{font-size:14px;color:var(--tx2)}
 .mut{font-size:13px;color:var(--tx3);line-height:1.6}
@@ -363,7 +363,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v28 · 16 Nov';
+const BUILD='v29 · 16 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
