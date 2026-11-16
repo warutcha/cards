@@ -58,6 +58,7 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .nav button.on{color:var(--tx);border-color:var(--line2);font-weight:600}
 .back{font-size:15px;color:var(--tx2);padding:6px 0;margin-bottom:6px;display:inline-block}
 .cpy{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin-left:6px;border-radius:8px;background:var(--line);color:var(--tx2);font-size:13px;vertical-align:middle;border:0;padding:0;cursor:pointer}
+.vpill{font-size:11px;color:var(--tx3);border:1px solid var(--line);border-radius:99px;padding:2px 8px;text-transform:none;letter-spacing:0}
 .item{display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)}
 .item:last-child{border-bottom:0}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:10px}
@@ -362,7 +363,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v27 · 16 Nov';
+const BUILD='v28 · 16 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -721,7 +722,7 @@ function vSetup(){
 function vHome(){
   const bills=S.cycles.filter(c=>c.status==='billed').sort((a,b)=>a.due<b.due?-1:1);
   const n=new Date();
-  let h=`<div class="lbl">${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][n.getDay()]}, ${n.getDate()} ${MON[n.getMonth()]}</div>`;
+  let h=`<div class="lbl" style="display:flex;justify-content:space-between;align-items:center"><span>${['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][n.getDay()]}, ${n.getDate()} ${MON[n.getMonth()]}</span><span class="vpill">${BUILD}</span></div>`;
   h+='<div class="card" style="padding:4px 16px;margin-top:12px">';
   const vis=visibleCards();
   vis.forEach((c,i)=>{
