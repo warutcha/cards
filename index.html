@@ -57,6 +57,7 @@ textarea{min-height:150px;font-size:14px;line-height:1.5}
 .nav button{font-size:13px;color:var(--tx2);padding:9px 13px;border-radius:12px;background:var(--card);border:1px solid var(--line)}
 .nav button.on{color:var(--tx);border-color:var(--line2);font-weight:600}
 .back{font-size:15px;color:var(--tx2);padding:6px 0;margin-bottom:6px;display:inline-block}
+.cpy{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;margin-left:6px;border-radius:8px;background:var(--line);color:var(--tx2);font-size:13px;vertical-align:middle;border:0;padding:0;cursor:pointer}
 .item{display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid var(--line)}
 .item:last-child{border-bottom:0}
 .pill{display:inline-block;font-size:12px;font-weight:600;padding:3px 9px;border-radius:10px}
@@ -361,7 +362,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v25 · 11 Nov';
+const BUILD='v26 · 16 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -595,6 +596,7 @@ function toast(m){
   const e=document.createElement('div');e.className='toast';e.textContent=m;document.body.appendChild(e);
   clearTimeout(toastT);toastT=setTimeout(()=>e.remove(),2200);
 }
+function cpb(n){return n&&n!=='—'?`<button class="cpy" data-copy="${esc(n)}" aria-label="Copy name">⧉</button>`:''}
 function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]))}
 
 function draw(){
@@ -642,7 +644,7 @@ function vConfirm(){
     ${q.hero.foot?`<div style="font-size:12px;color:${q.on};opacity:.85">${esc(q.hero.foot)}</div>`:''}
   </div>`:''}
   ${(q.items||[]).length?`<div class="card">${q.items.map(it=>
-    `<div class="item"><div class="mut">${esc(it[0])}</div><div>${it[1]}</div></div>`).join('')}</div>`:''}
+    `<div class="item"><div class="mut">${esc(it[0])}${cpb(it[2])}</div><div>${it[1]}</div></div>`).join('')}</div>`:''}
   ${(q.rows||[]).length?`<div class="card">${q.rows.map((r,i)=>
     `<div class="item"><div class="mut">${r[0]}</div><div style="${i===q.rows.length-1?'font-weight:600':''}">${r[1]}</div></div>`).join('')}</div>`:''}
   <button class="btn" ${q.color?`style="background:${q.color};color:#fff"`:''} data-act="confirmyes">${q.cta}</button>
@@ -864,7 +866,7 @@ function vCard(){
 
   h+=`<div class="card"><div class="row"><div class="nm">What you spent</div><div class="nm">${B(cc.spent)}</div></div>
     <div class="sp"></div>`;
-  h+= txns.length?txns.map(t=>`<div class="item"><div><div>${esc(t.note||'—')}</div>
+  h+= txns.length?txns.map(t=>`<div class="item"><div><div>${esc(t.note||'—')}${cpb(t.note)}</div>
       <div class="mut">${shortDate(t.date)}${t.moved?'':' · not moved yet'}</div></div>
       <div style="text-align:right"><div>${B(t.reserved)}</div>
       <button class="mut" data-del="${t.id}" style="text-decoration:underline">remove</button></div></div>`).join('')
@@ -1070,7 +1072,7 @@ function cardListBlock(rows,title,scope){
 function txnRow(t){
   const c=cardOrGhost(t.cardId);
   return `<div class="item">
-    <div><div style="font-size:14px">${esc(t.note||'—')}</div>
+    <div><div style="font-size:14px">${esc(t.note||'—')}${cpb(t.note)}</div>
       <div class="mut">${esc(c.name)} · ${shortDate(t.date)}${t.actual==null?' · estimated':''}</div></div>
     <div style="font-size:14px;font-weight:600">${B(txnAmt(t))}</div>
   </div>`;
@@ -1228,7 +1230,7 @@ function vSpendMonthDrill(key){
   ${top.length?`<div class="card">
     <div class="mut" style="margin-bottom:8px">Top merchants</div>
     ${top.map(([n,v],i)=>`<div class="item" style="${i?'':'border-top:0'}">
-      <span style="font-size:14px">${esc(n)}</span>
+      <span style="font-size:14px">${esc(n)}${cpb(n)}</span>
       <span style="font-size:14px">${B(v.amt)}${v.n>1?' · '+v.n+' buys':''}</span></div>`).join('')}
   </div>`:''}
   ${cardListBlock(rows,'By card',first+'|'+last)}`;
@@ -1301,7 +1303,7 @@ function pairBlock(L,t){
       <div class="mut">${shortDate(L.date)}</div></div>
     <div style="background:${dark()?'#378ADD26':'#E6F0FB'};border-radius:14px;padding:12px">
       <span class="tag t-app">FROM YOUR APP</span>
-      <div class="row" style="margin-top:6px"><div style="font-size:14px;font-weight:600"><span class="dot" style="background:${c.c};display:inline-block;width:10px;height:10px;margin-right:7px"></span>${esc(t.note)}</div><div style="font-weight:650">${B2(t.reserved)}</div></div>
+      <div class="row" style="margin-top:6px"><div style="font-size:14px;font-weight:600"><span class="dot" style="background:${c.c};display:inline-block;width:10px;height:10px;margin-right:7px"></span>${esc(t.note)}${cpb(t.note)}</div><div style="font-weight:650">${B2(t.reserved)}</div></div>
       <div class="mut">${esc(c.name)} · ${shortDate(t.date)}</div></div>
     <div>${exact?'<span class="sm2 y">✓ same amount</span>':`<span class="sm2 n">≈ ${B2(t.reserved)} set aside vs ${B2(L.amt)} billed</span>`}
       ${days===0?'<span class="sm2 y">✓ same day</span>':days<=3?`<span class="sm2 y">${days} day${days>1?'s':''} apart</span>`:`<span class="sm2 n">${days} days apart</span>`}
@@ -1322,7 +1324,7 @@ function vMatch(){
       return `<div class="item" style="display:block"><div class="row"><span class="tag t-bank">STATEMENT</span><span style="font-size:13px;font-weight:600">${B2(x.L.amt)}</span></div>
       <div style="font-size:13px;margin:2px 0 6px;word-break:break-word">${esc(x.L.desc)} <span class="mut">· ${shortDate(x.L.date)}</span></div>
       <div class="row"><span class="tag t-app">YOUR APP</span><span style="font-size:13px;font-weight:600">${B2(t.reserved)}</span></div>
-      <div style="font-size:13px;margin:2px 0 4px">${esc(t.note)} <span class="mut">· ${shortDate(t.date)}</span></div>
+      <div style="font-size:13px;margin:2px 0 4px">${esc(t.note)}${cpb(t.note)} <span class="mut">· ${shortDate(t.date)}</span></div>
       <button class="undo" data-act="msurenot" data-i="${i}">Not the same</button></div>`}).join('')}</div>`;
   }
   if(b.maybe.length){
@@ -1579,7 +1581,7 @@ function histResults(){
     <div class="mut" style="color:${dark()?'#85B7EB':'#1C5AA8'}">${rows.length} purchase${rows.length===1?'':'s'}${f.q?' matching “'+esc(f.q)+'”':''}</div>
     <div class="big" style="color:${dark()?'#85B7EB':'#1C5AA8'}">${B2(sum)}</div></div>
   <div class="card" style="padding:4px 16px">${shown.map(t=>{const c=cardOrGhost(t.cardId);
-    return `<div class="item"><div><div style="font-size:14px"><span class="dot" style="background:${c.c};display:inline-block;width:11px;height:11px;vertical-align:middle"></span>&nbsp;${hiText(t.note||'—',f.q)}</div>
+    return `<div class="item"><div><div style="font-size:14px"><span class="dot" style="background:${c.c};display:inline-block;width:11px;height:11px;vertical-align:middle"></span>&nbsp;${hiText(t.note||'—',f.q)}${cpb(t.note)}</div>
       <div class="mut" style="margin-left:19px">${esc(c.name)} · ${shortDate(t.date)}${t.moved?'':' · to move'}${isInst(t)?' · แบ่ง':''}${t.actual!=null?'':' · estimate'}</div></div>
       <div style="font-size:14px;font-weight:600">${B2(txnAmt(t))}</div></div>`}).join('')||'<div class="item mut">Nothing found</div>'}</div>
   ${rows.length>100?`<div class="mut" style="text-align:center">Showing the newest 100 of ${rows.length}</div>`:''}`;
@@ -1639,7 +1641,7 @@ function vCycle(){
     <div style="font-size:13px;color:${ontint(c)}">Bill</div>
     <div class="big" style="color:${ontint(c)};font-size:32px">${B2(cy.total)}</div></div>
   <div class="card">${txns.length?txns.map(t=>`<div class="item">
-      <div><div>${esc(t.note||'—')}</div><div class="mut">${shortDate(t.date)}</div></div>
+      <div><div>${esc(t.note||'—')}${cpb(t.note)}</div><div class="mut">${shortDate(t.date)}</div></div>
       <div>${B2(t.actual!=null?t.actual:t.reserved)}</div></div>`).join('')
     :'<div class="mut">No purchases were filed into this cycle.</div>'}</div>`;
   if(cy.status==='paid'){
@@ -2054,6 +2056,10 @@ document.addEventListener('pointercancel',()=>{dragI=null;dragList=null;draw();}
 
 /* ---------------- actions ---------------- */
 document.addEventListener('click',async e=>{
+  const cp=e.target.closest('[data-copy]');
+  if(cp){e.preventDefault();const v=cp.dataset.copy;
+    try{await navigator.clipboard.writeText(v)}catch(_){const a=document.createElement('textarea');a.value=v;document.body.appendChild(a);a.select();try{document.execCommand('copy')}catch(__){}a.remove()}
+    return toast('Copied “'+v+'”');}
   const t=e.target.closest('[data-go],[data-act],[data-k],[data-pick],[data-card],[data-pay],[data-del],[data-bpick],[data-chip],[data-edit],[data-pick-col],[data-undo],[data-cyc],[data-unpay],[data-delq],[data-addq],[data-movejar],[data-setbal],[data-jar],[data-jaredit],[data-togglecard],[data-spendtab],[data-spendnav],[data-spendbar],[data-seg],[data-bucket],[data-cardrow],[data-sheetclose]');
   if(!t)return;
   const g=t.dataset;
@@ -2131,9 +2137,9 @@ document.addEventListener('click',async e=>{
       ...td.txns.map(t=>{
         // the purchase that opened a แบ่ง plan is its first payment
         const pl=t.planTitle!==undefined?S.plans.find(p=>p.cardId===t.cardId&&p.start===t.date&&p.title===(t.planTitle||'—')):null;
-        return[(t.note||'—')+(pl?' (แบ่ง 1/'+pl.months+')':''),B2(t.reserved)];
+        return[(t.note||'—')+(pl?' (แบ่ง 1/'+pl.months+')':''),B2(t.reserved),t.note];
       }),
-      ...td.plans.map(p=>[(p.title||p.planTitle||'—')+' (แบ่ง '+(p.paid+1)+'/'+p.months+')',B2(up(p.monthly,autoStep(p.monthly)))])
+      ...td.plans.map(p=>[(p.title||p.planTitle||'—')+' (แบ่ง '+(p.paid+1)+'/'+p.months+')',B2(up(p.monthly,autoStep(p.monthly))),p.title||p.planTitle])
     ];
     return ask({kind:'move',jar:j.id,title:'Moved the money?',
       sub:'Tap yes once you\'ve made the transfer in your banking app.',
