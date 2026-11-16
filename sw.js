@@ -9,22 +9,11 @@ async function sha(s){
 
 self.addEventListener('install',()=>self.skipWaiting());
 
-/* always open the newest version of the app; fall back to the last copy when offline */
-self.addEventListener('fetch',e=>{
-  const r=e.request;
-  if(r.method!=='GET'||r.mode!=='navigate')return;
-  e.respondWith((async()=>{
-    const cache=await caches.open('cards-page');
-    try{
-      const res=await fetch(r,{cache:'no-store'});
-      if(res&&res.ok)cache.put(r,res.clone());
-      return res;
-    }catch(_){
-      return (await cache.match(r))||(await cache.match('./'))||Response.error();
-    }
-  })());
-});
-self.addEventListener('activate',e=>e.waitUntil(self.clients.claim()));
+/* no page caching here: just clear anything an older version of this file stored */
+self.addEventListener('activate',e=>e.waitUntil((async()=>{
+  try{await caches.delete('cards-page');}catch(_){}
+  await self.clients.claim();
+})()));
 
 self.addEventListener('push',e=>{
   e.waitUntil((async()=>{
