@@ -362,7 +362,7 @@ async function pullDown(){
   }catch(e){setCfg({...cfg(),err:String(e.message)});return 'error';}
 }
 
-const BUILD='v26 · 16 Nov';
+const BUILD='v27 · 16 Nov';
 /* ---------------- cards ---------------- */
 const CARDS=[
  {id:'tmrw', name:'TMRW',           cut:7,  due:31, split:0, c:'#7F77DD', t:'#EEEDFE', d:'#3C3489'},
@@ -867,7 +867,7 @@ function vCard(){
   h+=`<div class="card"><div class="row"><div class="nm">What you spent</div><div class="nm">${B(cc.spent)}</div></div>
     <div class="sp"></div>`;
   h+= txns.length?txns.map(t=>`<div class="item"><div><div>${esc(t.note||'—')}${cpb(t.note)}</div>
-      <div class="mut">${shortDate(t.date)}${t.moved?'':' · not moved yet'}</div></div>
+      <div class="mut">${shortDate(t.date)}${(()=>{const pl=t.planTitle!==undefined?S.plans.find(p=>p.cardId===t.cardId&&p.start===t.date&&p.title===(t.planTitle||'—')):null;return pl?' · แบ่ง 1/'+pl.months:''})()}${t.moved?'':' · not moved yet'}</div></div>
       <div style="text-align:right"><div>${B(t.reserved)}</div>
       <button class="mut" data-del="${t.id}" style="text-decoration:underline">remove</button></div></div>`).join('')
     :'<div class="mut">Nothing logged on this card yet.</div>';
